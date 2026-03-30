@@ -1,0 +1,280 @@
+"""
+Inference Script — Fake News Investigator Environment
+=====================================================
+MANDATORY ENVIRONMENT VARIABLES:
+    API_BASE_URL   The API endpoint for the LLM (default: https://router.huggingface.co/v1)
+    MODEL_NAME     The model identifier to use for inference
+    HF_TOKEN       Your Hugging Face / API key
+
+Uses OpenAI Client for all LLM calls as required by the hackathon.
+"""
+
+import json
+import os
+import re
+import sys
+import textwrap
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from openai import OpenAI
+
+from fake_news_investigator.models import InvestigateAction
+from fake_news_investigator.server.environment import FakeNewsEnvironment
+
+# =========================================================================
+# MANDATORY environment variables
+# =========================================================================
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
+MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
+
+MAX_STEPS = 8
+TEMPERATURE = 0.0
+MAX_TOKENS = 400
+
+SYSTEM_PROMPT = textwrap.dedent("""
+You are a professional fact-checking investigator. You investigate claims
+to determine their veracity. You have a limited investigation budget.
+
+Available actions (respond with VALID JSON only, no markdown, no explanation):
+
+1. Request evidence from a source category:
+   {"action_type": "request_source", "source_id": "<category>"}
+   Categories: government_data, academic_papers, news_articles, fact_checks,
+   medical_journals, statistical_reports, international_organizations, industry_reports
+
+2. Cross-reference the claim against a source:
+   {"action_type": "cross_reference", "source_id": "<category>"}
+
+3. Check source credibility:
+   {"action_type": "check_credibility", "source_id": "<source_name_or_url>"}
+
+4. Submit your final verdict:
+   {"action_type": "submit_verdict", "verdict": "<LABEL>",
+    "evidence": ["source1", "source2"],
+    "confidence": 0.0-1.0,
+    "reasoning": "Your explanation"}
+   Labels: TRUE, MOSTLY_TRUE, HALF_TRUE, MOSTLY_FALSE, FALSE, PANTS_ON_FIRE
+
+Strategy:
+- Start by requesting fact_checks or government_data
+- Cross-reference the claim against authoritative sources
+- Check credibility of any suspicious sources
+- Submit verdict with evidence and reasoning
+- Be efficient: fewer steps = higher score
+
+RESPOND WITH JSON ONLY. NO MARKDOWN. NO EXPLANATION OUTSIDE THE JSON.
+""").strip()
+
+ACTION_PATTERN = re.compile(r'\{[^{}]*"action_type"[^{}]*\}', re.DOTALL)
+
+
+def extract_json_action(text: str) -> dict:
+    """Extract a JSON action from the model's response."""
+    # Try direct parse
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"```(?:json)?\s*", "", text)
+        text = re.sub(r"```\s*$", "", text)
+        text = text.strip()
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try regex extraction
+    match = ACTION_PATTERN.search(text)
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
+def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
+    """Run a single investigation episode."""
+    obs = env.reset(task=task)
+    initial_budget = obs.budget_remaining
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": (
+            f"CLAIM TO INVESTIGATE: \"{obs.claim}\"\n\n"
+            f"Available source categories: {', '.join(obs.available_sources)}\n"
+            f"Investigation budget: {obs.budget_remaining} steps\n\n"
+            f"Begin your investigation. Respond with a JSON action."
+        )},
+    ]
+
+    step_count = 0
+    while not obs.done and step_count < initial_budget + 2:
+        try:
+            completion = client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=messages,
+                temperature=TEMPERATURE,
+                max_tokens=MAX_TOKENS,
+                stream=False,
+            )
+            response_text = completion.choices[0].message.content or ""
+        except Exception as exc:
+            print(f"  LLM request failed: {exc}. Submitting fallback verdict.")
+            obs = env.step(InvestigateAction(
+                action_type="submit_verdict",
+                verdict="HALF_TRUE",
+                evidence=[],
+                confidence=0.3,
+                reasoning=f"Investigation incomplete due to error: {str(exc)[:100]}",
+            ))
+            break
+
+        action_data = extract_json_action(response_text)
+        if action_data is None:
+            # Force verdict submission on parse failure
+            obs = env.step(InvestigateAction(
+                action_type="submit_verdict",
+                verdict="HALF_TRUE",
+                evidence=[],
+                confidence=0.3,
+                reasoning="Unable to parse investigation action.",
+            ))
+            break
+
+        try:
+            action = InvestigateAction(**action_data)
+            obs = env.step(action)
+            step_count += 1
+        except Exception as exc:
+            print(f"  Invalid action: {exc}. Submitting fallback.")
+            obs = env.step(InvestigateAction(
+                action_type="submit_verdict",
+                verdict="HALF_TRUE",
+                evidence=[],
+                confidence=0.3,
+                reasoning=f"Invalid action: {str(exc)[:100]}",
+            ))
+            break
+
+        # Add to conversation
+        messages.append({"role": "assistant", "content": response_text})
+
+        feedback = f"Result: {obs.message}\n"
+        if obs.source_content:
+            feedback += f"Source content: {obs.source_content[:500]}\n"
+        if obs.cross_ref_result:
+            feedback += f"Cross-reference NLI: {json.dumps(obs.cross_ref_result)}\n"
+        if obs.credibility_score is not None:
+            feedback += f"Credibility: {obs.credibility_score} ({obs.credibility_details})\n"
+        feedback += f"Budget remaining: {obs.budget_remaining}\n"
+
+        if obs.budget_remaining <= 1 and not obs.done:
+            feedback += "WARNING: Budget almost exhausted. Submit your verdict NOW."
+
+        messages.append({"role": "user", "content": feedback})
+
+    return obs.reward if obs.reward is not None else 0.0
+
+
+def main():
+    print("=" * 60)
+    print("Fake News Investigator — Inference Script")
+    print("=" * 60)
+    print(f"API Base URL: {API_BASE_URL}")
+    print(f"Model: {MODEL_NAME}")
+    print(f"API Key: {'set' if API_KEY else 'NOT SET'}")
+    print()
+
+    if not API_KEY:
+        print("WARNING: HF_TOKEN / API_KEY not set. LLM calls will likely fail.")
+        print("Set HF_TOKEN environment variable and retry.")
+        print("Falling back to heuristic baseline...\n")
+        return run_heuristic_fallback()
+
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    env = FakeNewsEnvironment()
+    all_results = {}
+    episodes_per_task = 5
+
+    for task in ["easy", "medium", "hard"]:
+        print(f"\n--- Task: {task} ({episodes_per_task} episodes) ---")
+        scores = []
+
+        for ep in range(episodes_per_task):
+            score = run_episode(client, env, task)
+            scores.append(score)
+            print(f"  Episode {ep+1}: score={score:.4f}")
+
+        avg = sum(scores) / len(scores) if scores else 0.0
+        all_results[task] = {
+            "average_score": round(avg, 4),
+            "min_score": round(min(scores), 4) if scores else 0,
+            "max_score": round(max(scores), 4) if scores else 0,
+            "episodes": len(scores),
+            "scores": [round(s, 4) for s in scores],
+        }
+        print(f"  Average: {avg:.4f}")
+
+    print("\n" + "=" * 60)
+    print("INFERENCE RESULTS")
+    print("=" * 60)
+    print(json.dumps(all_results, indent=2))
+    return all_results
+
+
+def run_heuristic_fallback():
+    """Heuristic baseline when no API key is available."""
+    env = FakeNewsEnvironment()
+    all_results = {}
+
+    for task in ["easy", "medium", "hard"]:
+        scores = []
+        for _ in range(5):
+            obs = env.reset(task=task)
+            obs = env.step(InvestigateAction(
+                action_type="request_source", source_id="fact_checks"))
+
+            evidence_text = (obs.source_content or "").lower()
+            has_contradiction = any(w in evidence_text for w in [
+                "false", "debunked", "incorrect", "misleading",
+                "contradicts", "refuted", "inaccurate",
+            ])
+            has_support = any(w in evidence_text for w in [
+                "confirmed", "accurate", "correct", "true",
+                "verified", "supports",
+            ])
+
+            verdict = "HALF_TRUE"
+            conf = 0.4
+            if has_contradiction and not has_support:
+                verdict, conf = "FALSE", 0.65
+            elif has_support and not has_contradiction:
+                verdict, conf = "TRUE", 0.65
+
+            obs = env.step(InvestigateAction(
+                action_type="submit_verdict",
+                verdict=verdict,
+                evidence=["fact_checks"],
+                confidence=conf,
+                reasoning=f"Heuristic: {'contradiction' if has_contradiction else 'support' if has_support else 'ambiguous'} detected.",
+            ))
+            if obs.reward is not None:
+                scores.append(obs.reward)
+
+        avg = sum(scores) / len(scores) if scores else 0.0
+        all_results[task] = {
+            "average_score": round(avg, 4),
+            "episodes": len(scores),
+            "scores": [round(s, 4) for s in scores],
+        }
+        print(f"{task:8s} | avg={avg:.4f}")
+
+    print("\n" + json.dumps(all_results, indent=2))
+    return all_results
+
+
+if __name__ == "__main__":
+    main()

@@ -1,3 +1,15 @@
+---
+title: Fake News Investigator
+emoji: 🔍
+colorFrom: blue
+colorTo: red
+sdk: docker
+pinned: false
+app_port: 8000
+tags:
+  - openenv
+---
+
 # Fake News Investigator — OpenEnv Environment
 
 An interactive fact-checking environment where AI agents learn to **investigate** and **verify** factual claims through a multi-step process: requesting evidence, cross-referencing sources, checking credibility, and submitting reasoned verdicts.
