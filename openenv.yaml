@@ -1,0 +1,7 @@
+name: fake_news_investigator
+version: "1.0.0"
+description: >
+  An interactive fact-checking environment where AI agents learn to investigate
+  and verify claims by requesting evidence, cross-referencing sources, checking
+  credibility, and submitting reasoned verdicts with confidence scores.
+  Trains the investigative PROCESS, not just classification accuracy.
