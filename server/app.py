@@ -1,5 +1,9 @@
 """FastAPI server for the Fake News Investigator environment."""
 
+from pathlib import Path
+
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from openenv.core.env_server import create_fastapi_app
 
 from ..models import InvestigateAction, InvestigateObservation
@@ -12,6 +16,25 @@ app = create_fastapi_app(
     InvestigateObservation,
     max_concurrent_envs=10,
 )
+
+# CORS for frontend testing (allows browser to call API)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+
+
+@app.get("/frontend", response_class=HTMLResponse)
+def serve_frontend():
+    """Serve the testing frontend (only available on frontend-testing branch)."""
+    html_path = FRONTEND_DIR / "index.html"
+    if html_path.exists():
+        return HTMLResponse(content=html_path.read_text(), status_code=200)
+    return HTMLResponse(content="<h1>Frontend not found</h1><p>This endpoint is only available on the frontend-testing branch.</p>", status_code=404)
 
 
 # =========================================================================
