@@ -165,6 +165,15 @@ class FakeNewsEnvironment(
             self._last_message = "No source_id specified. Provide a source category."
             return self._make_observation(message=self._last_message)
 
+        # Validate source_id against known categories
+        if source_id not in SOURCE_CATEGORIES:
+            self._penalties += 0.02
+            self._last_message = (
+                f"Unknown source_id '{source_id}'. "
+                f"Available categories: {', '.join(SOURCE_CATEGORIES)}"
+            )
+            return self._make_observation(message=self._last_message)
+
         evidence_passages = self._current_claim.get("evidence_passages", {})
 
         # Exact match first, then substring fallback
@@ -339,11 +348,13 @@ class FakeNewsEnvironment(
         )
 
     def _simulate_nli(self, label: str, source_id: str) -> dict:
-        """Simulate NLI scores deterministically based on claim label.
+        """Simulate NLI scores based on claim label with added noise.
 
-        For the hackathon, this provides deterministic cross-reference
-        results. In production, this would run DeBERTa inference.
+        For the hackathon, this provides cross-reference results with slight
+        randomness to prevent agents from gaming deterministic patterns.
+        In production, this would run DeBERTa inference.
         """
+        import random
         # Evidence from fact-checks and government data tends to contradict false claims
         authoritative_sources = {
             "government_data", "fact_checks", "medical_journals",
@@ -353,28 +364,42 @@ class FakeNewsEnvironment(
 
         if label == "false":
             if is_authoritative:
-                return {"entailment": 0.05, "contradiction": 0.88, "neutral": 0.07}
-            return {"entailment": 0.15, "contradiction": 0.65, "neutral": 0.20}
+                return self._add_nli_noise({"entailment": 0.05, "contradiction": 0.88, "neutral": 0.07})
+            return self._add_nli_noise({"entailment": 0.15, "contradiction": 0.65, "neutral": 0.20})
         elif label == "pants-fire":
             # Pants-on-fire is HARD tier — make NLI more ambiguous
             # so heuristic agents can't easily distinguish from half-true
             if is_authoritative:
-                return {"entailment": 0.15, "contradiction": 0.50, "neutral": 0.35}
-            return {"entailment": 0.25, "contradiction": 0.40, "neutral": 0.35}
+                return self._add_nli_noise({"entailment": 0.15, "contradiction": 0.50, "neutral": 0.35})
+            return self._add_nli_noise({"entailment": 0.25, "contradiction": 0.40, "neutral": 0.35})
         elif label in ("barely-true", "mostly-false"):
             if is_authoritative:
-                return {"entailment": 0.12, "contradiction": 0.68, "neutral": 0.20}
-            return {"entailment": 0.25, "contradiction": 0.45, "neutral": 0.30}
+                return self._add_nli_noise({"entailment": 0.12, "contradiction": 0.68, "neutral": 0.20})
+            return self._add_nli_noise({"entailment": 0.25, "contradiction": 0.45, "neutral": 0.30})
         elif label == "half-true":
             # Half-true is HARD tier — highly ambiguous NLI
-            return {"entailment": 0.33, "contradiction": 0.34, "neutral": 0.33}
+            return self._add_nli_noise({"entailment": 0.33, "contradiction": 0.34, "neutral": 0.33})
         elif label in ("mostly-true",):
             if is_authoritative:
-                return {"entailment": 0.70, "contradiction": 0.10, "neutral": 0.20}
-            return {"entailment": 0.50, "contradiction": 0.20, "neutral": 0.30}
+                return self._add_nli_noise({"entailment": 0.70, "contradiction": 0.10, "neutral": 0.20})
+            return self._add_nli_noise({"entailment": 0.50, "contradiction": 0.20, "neutral": 0.30})
         elif label == "true":
             if is_authoritative:
-                return {"entailment": 0.88, "contradiction": 0.05, "neutral": 0.07}
-            return {"entailment": 0.65, "contradiction": 0.15, "neutral": 0.20}
+                return self._add_nli_noise({"entailment": 0.88, "contradiction": 0.05, "neutral": 0.07})
+            return self._add_nli_noise({"entailment": 0.65, "contradiction": 0.15, "neutral": 0.20})
         else:
-            return {"entailment": 0.33, "contradiction": 0.33, "neutral": 0.34}
+            base = {"entailment": 0.33, "contradiction": 0.33, "neutral": 0.34}
+            return self._add_nli_noise(base)
+
+    @staticmethod
+    def _add_nli_noise(scores: dict, noise_range: float = 0.08) -> dict:
+        """Add small random noise to NLI scores so agents can't memorize exact values."""
+        import random
+        noisy = {}
+        for key, val in scores.items():
+            noisy[key] = max(0.0, min(1.0, val + random.uniform(-noise_range, noise_range)))
+        # Re-normalize to sum to 1.0
+        total = sum(noisy.values())
+        if total > 0:
+            noisy = {k: round(v / total, 4) for k, v in noisy.items()}
+        return noisy

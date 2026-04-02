@@ -2,9 +2,16 @@ from openenv.core.env_client import EnvClient
 
 from .models import InvestigateAction, InvestigateObservation, InvestigateState
 
+# Default timeout for server requests (seconds)
+DEFAULT_TIMEOUT = 15
+
 
 class FakeNewsEnv(EnvClient):
     """Client for the Fake News Investigator environment."""
+
+    def __init__(self, base_url: str = "http://localhost:8000", timeout: float = DEFAULT_TIMEOUT):
+        super().__init__(base_url=base_url)
+        self.timeout = timeout
 
     def _step_payload(self, action: InvestigateAction) -> dict:
         return action.model_dump(exclude_none=True)

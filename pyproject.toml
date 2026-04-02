@@ -8,13 +8,13 @@ version = "1.0.0"
 description = "An OpenEnv environment for training AI agents to investigate and verify factual claims"
 requires-python = ">=3.10"
 dependencies = [
-    "openenv-core>=0.2.0",
-    "fastapi>=0.104.0",
-    "uvicorn>=0.24.0",
-    "pydantic>=2.0.0",
+    "openenv-core>=0.2.0,<0.3.0",
+    "fastapi>=0.104.0,<1.0.0",
+    "uvicorn>=0.24.0,<1.0.0",
+    "pydantic>=2.0.0,<3.0.0",
 ]
 
 [project.optional-dependencies]
 baseline = [
-    "openai>=1.0.0",
+    "openai>=1.0.0,<2.0.0",
 ]
