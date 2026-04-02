@@ -15,7 +15,11 @@ import re
 import sys
 import textwrap
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Ensure both the package dir and its parent are importable
+_this_dir = os.path.dirname(os.path.abspath(__file__))
+_parent_dir = os.path.dirname(_this_dir)
+sys.path.insert(0, _this_dir)
+sys.path.insert(0, _parent_dir)
 
 from openai import OpenAI
 
@@ -26,7 +30,7 @@ from fake_news_investigator.server.environment import FakeNewsEnvironment
 # MANDATORY environment variables
 # =========================================================================
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
+API_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
 
 MAX_STEPS = 8
