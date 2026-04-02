@@ -126,8 +126,8 @@ Penalties: irrelevant source requests (-0.03), verdict without evidence (-0.20),
 | Task | Avg Score | Method |
 |------|-----------|--------|
 | easy | 0.74 | Request fact_checks + gov_data, keyword analysis, decide |
-| medium | 0.67 | Same heuristic |
-| hard | 0.53 | Same heuristic |
+| medium | 0.46 | Same heuristic |
+| hard | 0.49 | Same heuristic |
 
 ### LLM Baseline
 
