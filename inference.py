@@ -122,13 +122,17 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
             )
             response_text = completion.choices[0].message.content or ""
         except Exception as exc:
-            print(f"  LLM request failed: {exc}. Submitting fallback verdict.")
+            error_msg = str(exc)[:200]
+            # Redact any API keys that might appear in error messages
+            if API_KEY and API_KEY in error_msg:
+                error_msg = error_msg.replace(API_KEY, "***REDACTED***")
+            print(f"  LLM request failed: {error_msg}. Submitting fallback verdict.")
             obs = env.step(InvestigateAction(
                 action_type="submit_verdict",
                 verdict="HALF_TRUE",
                 evidence=[],
                 confidence=0.3,
-                reasoning=f"Investigation incomplete due to error: {str(exc)[:100]}",
+                reasoning="Investigation incomplete due to LLM error.",
             ))
             break
 

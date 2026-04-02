@@ -152,14 +152,27 @@ def run_with_openai(env, task: str, episodes: int = 5, provider: str = "groq"):
                        "Continue investigating or submit verdict.")
                 )})
 
-            except (json.JSONDecodeError, Exception) as e:
-                # If LLM returns invalid JSON, force a verdict submission
+            except json.JSONDecodeError as e:
+                print(f"  LLM returned invalid JSON: {content[:100]}...")
                 obs = env.step(InvestigateAction(
                     action_type="submit_verdict",
                     verdict="HALF_TRUE",
                     evidence=[],
                     confidence=0.3,
-                    reasoning=f"Unable to complete investigation. Error: {str(e)[:100]}",
+                    reasoning="Investigation incomplete: LLM returned invalid JSON.",
+                ))
+                break
+            except Exception as e:
+                error_msg = str(e)[:200]
+                if api_key and api_key in error_msg:
+                    error_msg = error_msg.replace(api_key, "***REDACTED***")
+                print(f"  Error during investigation: {error_msg}")
+                obs = env.step(InvestigateAction(
+                    action_type="submit_verdict",
+                    verdict="HALF_TRUE",
+                    evidence=[],
+                    confidence=0.3,
+                    reasoning="Investigation incomplete due to error.",
                 ))
                 break
 
