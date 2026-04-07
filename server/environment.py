@@ -74,6 +74,8 @@ class FakeNewsEnvironment(
         # Pick a random claim from the difficulty tier
         self._current_claim = self.claim_manager.get_random_claim(self._difficulty)
 
+        image_url = self._current_claim.get("image_url")
+        visual_note = " This claim has an associated image — use analyze_image to examine it." if image_url else ""
         return InvestigateObservation(
             claim=self._current_claim["claim"],
             available_sources=SOURCE_CATEGORIES,
@@ -84,10 +86,11 @@ class FakeNewsEnvironment(
             budget_remaining=self._budget,
             steps_taken=0,
             message=f"New investigation started. Difficulty: {self._difficulty}. "
-            f"You have {self._budget} investigation steps. "
-            f"Investigate the claim and submit your verdict.",
+            f"You have {self._budget} investigation steps."
+            f"{visual_note} Investigate the claim and submit your verdict.",
             done=False,
             reward=None,
+            image_url=image_url,
         )
 
     def step(
@@ -126,6 +129,8 @@ class FakeNewsEnvironment(
             return self._handle_cross_reference(action)
         elif action.action_type == "check_credibility":
             return self._handle_check_credibility(action)
+        elif action.action_type == "analyze_image":
+            return self._handle_analyze_image(action)
         elif action.action_type == "submit_verdict":
             return self._handle_submit_verdict(action)
         else:
@@ -279,6 +284,38 @@ class FakeNewsEnvironment(
 
         return self._make_observation(message=self._last_message)
 
+    def _handle_analyze_image(
+        self, action: InvestigateAction
+    ) -> InvestigateObservation:
+        """Handle analyze_image action — return visual analysis of the claim's image."""
+        self._steps_used += 1
+        image_url = self._current_claim.get("image_url")
+
+        if not image_url:
+            self._last_source_content = (
+                "No image is associated with this claim. "
+                "This is a text-only claim — use request_source or cross_reference instead."
+            )
+            self._last_message = (
+                f"No image found for this claim. "
+                f"Budget remaining: {self._budget - self._steps_used}"
+            )
+            self._penalties += 0.02  # Small penalty for wasting a step
+        else:
+            evidence_passages = self._current_claim.get("evidence_passages", {})
+            analysis = evidence_passages.get(
+                "image_analysis",
+                "Image analysis is not available for this claim.",
+            )
+            self._last_source_content = analysis
+            self._accessed_sources.append("image_analysis")
+            self._last_message = (
+                f"Visual analysis complete. "
+                f"Budget remaining: {self._budget - self._steps_used}"
+            )
+
+        return self._make_observation(message=self._last_message)
+
     def _handle_submit_verdict(
         self, action: InvestigateAction
     ) -> InvestigateObservation:
@@ -333,6 +370,7 @@ class FakeNewsEnvironment(
 
     def _make_observation(self, message: str) -> InvestigateObservation:
         """Build an observation from current state."""
+        image_url = self._current_claim.get("image_url") if self._current_claim else None
         return InvestigateObservation(
             claim=self._current_claim["claim"] if self._current_claim else "",
             available_sources=SOURCE_CATEGORIES,
@@ -345,6 +383,7 @@ class FakeNewsEnvironment(
             message=message,
             done=self._done,
             reward=self._reward if self._done else None,
+            image_url=image_url,
         )
 
     def _simulate_nli(self, label: str, source_id: str) -> dict:

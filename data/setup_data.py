@@ -68,7 +68,8 @@ def setup_from_huggingface():
             difficulty TEXT NOT NULL,
             gold_evidence TEXT DEFAULT '[]',
             gold_reasoning TEXT DEFAULT '',
-            evidence_passages TEXT DEFAULT '{}'
+            evidence_passages TEXT DEFAULT '{}',
+            image_url TEXT DEFAULT NULL
         )
     """)
 
@@ -259,7 +260,8 @@ def _download_liar_tsv() -> bool:
             difficulty TEXT NOT NULL,
             gold_evidence TEXT DEFAULT '[]',
             gold_reasoning TEXT DEFAULT '',
-            evidence_passages TEXT DEFAULT '{}'
+            evidence_passages TEXT DEFAULT '{}',
+            image_url TEXT DEFAULT NULL
         )
     """)
 
