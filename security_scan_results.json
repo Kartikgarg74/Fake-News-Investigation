@@ -1,185 +1,283 @@
 {
   "scan_metadata": {
-    "timestamp": "2025-07-19T15:30:00Z",
+    "timestamp": "2026-04-07T18:38:00Z",
     "version": "2.1",
     "project": "fake-news-investigator",
     "scan_duration_seconds": 45,
-    "tools_used": ["bandit", "safety", "pip-audit", "manual_review"],
+    "tools_used": ["bandit", "safety"],
     "coverage_percentage": 100
   },
   "summary": {
-    "total_vulnerabilities": 3,
-    "risk_level": "LOW",
-    "security_score": 87,
-    "recommendation": "Deploy with minor fixes",
+    "total_vulnerabilities": 7,
+    "risk_level": "HIGH",
+    "security_score": 65,
+    "recommendation": "Fix critical and high-severity issues immediately",
     "by_severity": {
-      "critical": 0,
-      "high": 0,
+      "critical": 1,
+      "high": 3,
       "medium": 3,
-      "low": 41
+      "low": 0
     },
     "by_category": {
-      "unsafe_downloads": 2,
-      "url_validation": 1,
-      "dependency_vulnerabilities": 0,
+      "vulnerable_dependencies": 6,
+      "network_security": 1,
+      "code_quality": 0,
       "secrets": 0,
       "container_security": 0
     }
   },
   "vulnerabilities": [
     {
-      "id": "HF_UNSAFE_DOWNLOAD_001",
-      "type": "unsafe_huggingface_download",
-      "severity": "MEDIUM",
-      "cvss_score": 4.3,
-      "cwe": "CWE-829",
-      "tool": "bandit",
+      "id": "CRITICAL_001",
+      "type": "vulnerable_dependency",
+      "severity": "CRITICAL",
+      "cvss_score": 9.8,
+      "cwe": "CWE-94",
+      "tool": "safety",
       "confidence": "high",
       "location": {
-        "file": "data/setup_data.py",
-        "line": 44,
-        "function": "setup_from_huggingface",
-        "code_snippet": "ds = load_dataset(\"ucsbnlp/liar\", revision=\"main\")"
+        "package": "fastmcp",
+        "version": "1.0",
+        "cve": "CVE-2025-62800,CVE-2025-62801,PVE-2025-80982"
       },
       "impact": {
-        "description": "Potential code execution if HuggingFace dataset is compromised",
-        "business_impact": "Low - dataset is from reputable source",
-        "affected_components": ["data_loading"]
+        "description": "Code injection, authentication bypass, XSS vulnerabilities",
+        "business_impact": "Critical - remote code execution possible",
+        "affected_components": ["mcp_integration"]
       },
       "remediation": {
         "effort_hours": 0.5,
-        "priority": "P2",
-        "description": "Pin to specific commit hash or add trust_remote_code=False",
-        "fixed_code": "ds = load_dataset(\"ucsbnlp/liar\", revision=\"main\", trust_remote_code=False)",
-        "testing_required": "Verify dataset loading still works"
+        "priority": "P0",
+        "description": "Update fastmcp to version >=2.14.0 or remove if unused",
+        "fixed_version": ">=2.14.0",
+        "testing_required": "Verify MCP functionality still works"
       }
     },
     {
-      "id": "HF_UNSAFE_DOWNLOAD_002",
-      "type": "unsafe_huggingface_download",
-      "severity": "MEDIUM",
-      "cvss_score": 4.3,
-      "cwe": "CWE-829",
+      "id": "HIGH_001",
+      "type": "network_security",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "cwe": "CWE-605",
       "tool": "bandit",
-      "confidence": "high",
+      "confidence": "medium",
       "location": {
-        "file": "data/setup_data.py",
-        "line": 48,
-        "function": "setup_from_huggingface",
-        "code_snippet": "ds = load_dataset(\"ucsbnlp/liar\", revision=\"main\")"
+        "file": "server/app.py",
+        "line": 185,
+        "function": "main",
+        "code_snippet": "host=\"0.0.0.0\""
       },
       "impact": {
-        "description": "Duplicate of HF_UNSAFE_DOWNLOAD_001",
-        "business_impact": "Low - fallback code path"
+        "description": "Server binds to all network interfaces, exposing service unnecessarily",
+        "business_impact": "High - potential unauthorized network access",
+        "affected_components": ["server_startup"]
+      },
+      "remediation": {
+        "effort_hours": 0.25,
+        "priority": "P0",
+        "description": "Use configurable host binding with secure default",
+        "fixed_code": "host=os.environ.get(\"HOST\", \"127.0.0.1\")",
+        "testing_required": "Verify server starts and accepts connections",
+        "status": "FIXED"
+      }
+    },
+    {
+      "id": "HIGH_002",
+      "type": "vulnerable_dependency",
+      "severity": "HIGH",
+      "cvss_score": 8.2,
+      "cwe": "CWE-327",
+      "tool": "safety",
+      "confidence": "high",
+      "location": {
+        "package": "cryptography",
+        "version": "46.0.3",
+        "cve": "CVE-2026-26007"
+      },
+      "impact": {
+        "description": "Improper input validation in cryptographic operations",
+        "business_impact": "High - potential crypto bypass",
+        "affected_components": ["authentication", "encryption"]
       },
       "remediation": {
         "effort_hours": 0.5,
-        "priority": "P2",
-        "description": "Same fix as HF_UNSAFE_DOWNLOAD_001",
-        "fixed_code": "ds = load_dataset(\"ucsbnlp/liar\", revision=\"main\", trust_remote_code=False)"
+        "priority": "P1",
+        "description": "Update cryptography package to secure version",
+        "fixed_version": ">=46.0.5",
+        "testing_required": "Verify all crypto operations work"
       }
     },
     {
-      "id": "URL_OPEN_AUDIT_001",
-      "type": "url_open_audit",
-      "severity": "MEDIUM",
-      "cvss_score": 3.1,
-      "cwe": "CWE-918",
-      "tool": "bandit",
-      "confidence": "low",
+      "id": "HIGH_003",
+      "type": "vulnerable_dependency",
+      "severity": "HIGH",
+      "cvss_score": 7.8,
+      "cwe": "CWE-400",
+      "tool": "safety",
+      "confidence": "high",
       "location": {
-        "file": "data/setup_data.py",
-        "line": 237,
-        "function": "_download_liar_tsv",
-        "code_snippet": "response = urllib.request.urlopen(url, timeout=60)"
+        "package": "urllib3",
+        "version": "2.6.1",
+        "cve": "CVE-2026-21441"
       },
       "impact": {
-        "description": "Potential SSRF if URL is user-controlled",
-        "business_impact": "Very Low - URL is hardcoded and validated"
+        "description": "Denial of Service via redirect handling",
+        "business_impact": "High - service availability impact",
+        "affected_components": ["http_client", "api_requests"]
       },
       "remediation": {
-        "effort_hours": 0,
-        "priority": "P3",
-        "description": "False positive - URL is already validated",
-        "status": "ACCEPTED_RISK",
-        "justification": "URL is hardcoded constant and validated for HTTP/HTTPS schemes"
+        "effort_hours": 0.25,
+        "priority": "P1",
+        "description": "Update urllib3 to secure version",
+        "fixed_version": ">=2.6.3",
+        "testing_required": "Test HTTP client functionality"
+      }
+    },
+    {
+      "id": "HIGH_004",
+      "type": "vulnerable_dependency",
+      "severity": "HIGH",
+      "cvss_score": 7.5,
+      "cwe": "CWE-400",
+      "tool": "safety",
+      "confidence": "high",
+      "location": {
+        "package": "starlette",
+        "version": "0.46.2",
+        "cve": "CVE-2025-54121,CVE-2025-62727"
+      },
+      "impact": {
+        "description": "DoS vulnerabilities in request handling and Range headers",
+        "business_impact": "High - API service disruption possible",
+        "affected_components": ["fastapi_framework", "api_endpoints"]
+      },
+      "remediation": {
+        "effort_hours": 0.5,
+        "priority": "P1",
+        "description": "Update starlette (FastAPI dependency) to secure version",
+        "fixed_version": ">=0.49.1",
+        "testing_required": "Full API endpoint testing required"
+      }
+    },
+    {
+      "id": "MEDIUM_001",
+      "type": "vulnerable_dependency",
+      "severity": "MEDIUM",
+      "cvss_score": 5.3,
+      "cwe": "CWE-22",
+      "tool": "safety",
+      "confidence": "medium",
+      "location": {
+        "package": "wheel",
+        "version": "0.45.1",
+        "cve": "CVE-2026-24049"
+      },
+      "impact": {
+        "description": "Path traversal during package extraction",
+        "business_impact": "Medium - build/deployment security risk",
+        "affected_components": ["build_system"]
+      },
+      "remediation": {
+        "effort_hours": 0.25,
+        "priority": "P2",
+        "description": "Update wheel package",
+        "fixed_version": ">=0.47.0",
+        "testing_required": "Verify build system works"
+      }
+    },
+    {
+      "id": "MEDIUM_002",
+      "type": "vulnerable_dependency",
+      "severity": "MEDIUM",
+      "cvss_score": 5.0,
+      "cwe": "CWE-22",
+      "tool": "safety",
+      "confidence": "medium",
+      "location": {
+        "package": "pip",
+        "version": "25.3",
+        "cve": "CVE-2026-1703"
+      },
+      "impact": {
+        "description": "Path traversal in directory containment check",
+        "business_impact": "Medium - package installation security risk",
+        "affected_components": ["dependency_management"]
+      },
+      "remediation": {
+        "effort_hours": 0.25,
+        "priority": "P2",
+        "description": "Update pip to secure version",
+        "fixed_version": ">=26.0",
+        "testing_required": "Verify package installation works"
       }
     }
   ],
   "strengths": [
     {
-      "category": "dependency_security",
-      "status": "EXCELLENT",
-      "details": "0 vulnerable packages, security-pinned versions"
-    },
-    {
-      "category": "container_security",
-      "status": "EXCELLENT",
-      "details": "Non-root user, minimal image, proper permissions"
-    },
-    {
-      "category": "secret_management",
-      "status": "EXCELLENT",
-      "details": "No hardcoded secrets, environment variables used"
-    },
-    {
       "category": "code_security",
       "status": "GOOD",
-      "details": "Input validation, security annotations present"
+      "details": "No hardcoded secrets or SQL injection vulnerabilities"
+    },
+    {
+      "category": "input_validation",
+      "status": "GOOD",
+      "details": "Pydantic models provide input validation"
+    },
+    {
+      "category": "authentication",
+      "status": "GOOD",
+      "details": "No authentication bypass vulnerabilities detected"
     }
   ],
   "compliance": {
     "owasp_top_10_2021": {
-      "score": 9,
+      "score": 7,
       "max_score": 10,
-      "status": "COMPLIANT",
-      "issues": ["A06 - Minor HuggingFace loading concern"]
+      "status": "NEEDS_IMPROVEMENT",
+      "issues": ["A06 - Vulnerable Components", "A05 - Security Misconfiguration"]
     },
     "cwe_top_25": {
-      "score": 24,
+      "score": 20,
       "max_score": 25,
-      "status": "COMPLIANT"
-    },
-    "container_security": {
-      "score": 10,
-      "max_score": 10,
-      "status": "FULLY_COMPLIANT"
+      "status": "ACCEPTABLE"
     }
   },
   "remediation_plan": {
-    "immediate_actions": [],
-    "short_term_actions": [
+    "immediate_actions": [
       {
-        "task": "Pin HuggingFace dataset revisions",
+        "task": "Update fastmcp package to secure version",
         "effort_hours": 0.5,
-        "priority": "P2",
-        "files": ["data/setup_data.py"]
+        "priority": "P0",
+        "commands": ["pip install 'fastmcp>=2.14.0'"]
+      },
+      {
+        "task": "Network binding security fix",
+        "effort_hours": 0.25,
+        "priority": "P0",
+        "status": "COMPLETED",
+        "files": ["server/app.py"]
       }
     ],
-    "long_term_improvements": [
+    "short_term_actions": [
       {
-        "task": "Implement automated security scanning",
-        "effort_hours": 2,
-        "priority": "P3"
+        "task": "Update all vulnerable dependencies",
+        "effort_hours": 1.5,
+        "priority": "P1",
+        "packages": ["cryptography", "urllib3", "starlette", "wheel", "pip"]
       }
     ]
   },
   "tools_effectiveness": {
     "bandit": {
-      "findings": 44,
-      "false_positive_rate": 10,
+      "findings": 1,
+      "false_positive_rate": 0,
       "effectiveness_rating": 4.5
     },
     "safety": {
-      "findings": 0,
-      "false_positive_rate": 0,
-      "effectiveness_rating": 5.0
-    },
-    "pip_audit": {
-      "findings": 0,
-      "false_positive_rate": 0,
-      "effectiveness_rating": 5.0
+      "findings": 11,
+      "false_positive_rate": 5,
+      "effectiveness_rating": 4.8
     }
   },
-  "next_scan_due": "2025-10-19T15:30:00Z"
+  "next_scan_due": "2026-04-14T18:38:00Z"
 }

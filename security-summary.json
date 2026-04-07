@@ -1,0 +1,88 @@
+{
+  "timestamp": "2026-04-07T23:40:11.630342",
+  "scan_tools": [
+    "bandit",
+    "safety"
+  ],
+  "total_issues": 7,
+  "by_severity": {
+    "critical": 1,
+    "high": 3,
+    "medium": 3,
+    "low": 0
+  },
+  "findings": [
+    {
+      "tool": "bandit",
+      "severity": "MEDIUM",
+      "type": "hardcoded_bind_all_interfaces",
+      "file": "./server/app.py",
+      "line": 185,
+      "description": "Possible binding to all interfaces.",
+      "cwe": 605,
+      "confidence": "MEDIUM"
+    },
+    {
+      "tool": "safety",
+      "severity": "HIGH",
+      "type": "vulnerable_dependency",
+      "package": "cryptography",
+      "version": "46.0.3",
+      "cve": "CVE-2026-26007",
+      "description": "Vulnerable dependency: cryptography 46.0.3",
+      "priority": "P1"
+    },
+    {
+      "tool": "safety",
+      "severity": "MEDIUM",
+      "type": "vulnerable_dependency",
+      "package": "wheel",
+      "version": "0.45.1",
+      "cve": "CVE-2026-24049",
+      "description": "Vulnerable dependency: wheel 0.45.1",
+      "priority": "P2"
+    },
+    {
+      "tool": "safety",
+      "severity": "MEDIUM",
+      "type": "vulnerable_dependency",
+      "package": "pip",
+      "version": "25.3",
+      "cve": "CVE-2026-1703",
+      "description": "Vulnerable dependency: pip 25.3",
+      "priority": "P2"
+    },
+    {
+      "tool": "safety",
+      "severity": "HIGH",
+      "type": "vulnerable_dependency",
+      "package": "urllib3",
+      "version": "2.6.1",
+      "cve": "CVE-2026-21441",
+      "description": "Vulnerable dependency: urllib3 2.6.1",
+      "priority": "P1"
+    },
+    {
+      "tool": "safety",
+      "severity": "HIGH",
+      "type": "vulnerable_dependency",
+      "package": "starlette",
+      "version": "0.46.2",
+      "cve": "CVE-2025-54121,CVE-2025-62727",
+      "description": "Vulnerable dependency: starlette 0.46.2",
+      "priority": "P1"
+    },
+    {
+      "tool": "safety",
+      "severity": "CRITICAL",
+      "type": "vulnerable_dependency",
+      "package": "fastmcp",
+      "version": "1.0",
+      "cve": "CVE-2025-62800,CVE-2025-62801",
+      "description": "Vulnerable dependency: fastmcp 1.0",
+      "priority": "P0"
+    }
+  ],
+  "risk_level": "HIGH",
+  "security_score": 15
+}
