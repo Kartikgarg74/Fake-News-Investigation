@@ -26,7 +26,8 @@ from fake_news_investigator.server.environment import FakeNewsEnvironment
 # MANDATORY environment variables
 # =========================================================================
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY", "")
+HF_TOKEN = os.getenv("HF_TOKEN")
+LOCAL_IMAGE_NAME = os.getenv("LOCAL_IMAGE_NAME")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
 
 MAX_STEPS = 8
@@ -124,8 +125,8 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
         except Exception as exc:
             error_msg = str(exc)[:200]
             # Redact any API keys that might appear in error messages
-            if API_KEY and API_KEY in error_msg:
-                error_msg = error_msg.replace(API_KEY, "***REDACTED***")
+            if HF_TOKEN and HF_TOKEN in error_msg:
+                error_msg = error_msg.replace(HF_TOKEN, "***REDACTED***")
             print(f"  LLM request failed: {error_msg}. Submitting fallback verdict.")
             obs = env.step(InvestigateAction(
                 action_type="submit_verdict",
@@ -189,16 +190,16 @@ def main():
     print("=" * 60)
     print(f"API Base URL: {API_BASE_URL}")
     print(f"Model: {MODEL_NAME}")
-    print(f"API Key: {'set' if API_KEY else 'NOT SET'}")
+    print(f"API Key: {'set' if HF_TOKEN else 'NOT SET'}")
     print()
 
-    if not API_KEY:
-        print("WARNING: HF_TOKEN / API_KEY not set. LLM calls will likely fail.")
+    if not HF_TOKEN:
+        print("WARNING: HF_TOKEN / HF_TOKEN not set. LLM calls will likely fail.")
         print("Set HF_TOKEN environment variable and retry.")
         print("Falling back to heuristic baseline...\n")
         return run_heuristic_fallback()
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
     env = FakeNewsEnvironment()
     all_results = {}
     episodes_per_task = 5
