@@ -1,0 +1,238 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly on Mondays at 2 AM UTC
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Full history for secret scanning
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install security tools
+      run: |
+        pip install bandit[toml] safety pip-audit semgrep
+
+    - name: Run Bandit SAST scan
+      run: |
+        bandit -r . -f sarif -o bandit-results.sarif --severity-level medium
+        bandit -r . -f json -o bandit-results.json --severity-level medium
+
+    - name: Run Safety dependency scan
+      run: |
+        safety check --json --output safety-results.json || true
+
+    - name: Run pip-audit dependency scan
+      run: |
+        pip-audit -r server/requirements.txt --format=json --output=pip-audit-results.json || true
+
+    - name: Run Semgrep SAST scan
+      uses: returntocorp/semgrep-action@v1
+      with:
+        config: auto
+        generateSarif: "1"
+
+    - name: Check for secrets
+      run: |
+        # Simple secret pattern check
+        echo "Checking for potential secrets..."
+        grep -r -i -E "(password|secret|key|token)\s*[:=]\s*[\"'][^\"']{8,}" --include="*.py" --exclude-dir=__pycache__ . > secret-check.txt || echo "No hardcoded secrets found"
+
+    - name: Generate security summary
+      run: |
+        python << 'EOF'
+        import json
+        import os
+        from datetime import datetime
+
+        # Initialize summary
+        summary = {
+            'timestamp': datetime.now().isoformat(),
+            'total_issues': 0,
+            'by_tool': {},
+            'by_severity': {'critical': 0, 'high': 0, 'medium': 0, 'low': 0}
+        }
+
+        # Process Bandit results
+        try:
+            with open('bandit-results.json', 'r') as f:
+                bandit_data = json.load(f)
+                bandit_count = len(bandit_data.get('results', []))
+                summary['by_tool']['bandit'] = bandit_count
+                summary['total_issues'] += bandit_count
+
+                for result in bandit_data.get('results', []):
+                    severity = result.get('issue_severity', 'low').lower()
+                    if severity in summary['by_severity']:
+                        summary['by_severity'][severity] += 1
+                print(f"Bandit: {bandit_count} issues found")
+        except FileNotFoundError:
+            summary['by_tool']['bandit'] = 0
+            print("Bandit: No results file found")
+
+        # Process Safety results
+        try:
+            with open('safety-results.json', 'r') as f:
+                safety_data = json.load(f)
+                safety_count = len(safety_data) if isinstance(safety_data, list) else safety_data.get('vulnerabilities', 0)
+                summary['by_tool']['safety'] = safety_count
+                summary['total_issues'] += safety_count
+                print(f"Safety: {safety_count} vulnerabilities found")
+        except (FileNotFoundError, json.JSONDecodeError):
+            summary['by_tool']['safety'] = 0
+            print("Safety: No vulnerabilities found")
+
+        # Process pip-audit results
+        try:
+            with open('pip-audit-results.json', 'r') as f:
+                audit_data = json.load(f)
+                audit_count = len(audit_data.get('vulnerabilities', []))
+                summary['by_tool']['pip_audit'] = audit_count
+                summary['total_issues'] += audit_count
+                print(f"pip-audit: {audit_count} vulnerabilities found")
+        except (FileNotFoundError, json.JSONDecodeError):
+            summary['by_tool']['pip_audit'] = 0
+            print("pip-audit: No vulnerabilities found")
+
+        # Determine overall risk level
+        if summary['by_severity']['critical'] > 0:
+            risk_level = 'CRITICAL'
+        elif summary['by_severity']['high'] > 0:
+            risk_level = 'HIGH'
+        elif summary['by_severity']['medium'] > 0:
+            risk_level = 'MEDIUM'
+        else:
+            risk_level = 'LOW'
+
+        summary['risk_level'] = risk_level
+
+        # Save summary
+        with open('security-summary.json', 'w') as f:
+            json.dump(summary, f, indent=2)
+
+        # Generate markdown summary
+        with open('security-summary.md', 'w') as f:
+            f.write(f"# Security Scan Results\n\n")
+            f.write(f"**Scan Date**: {summary['timestamp']}\n")
+            f.write(f"**Risk Level**: {risk_level}\n")
+            f.write(f"**Total Issues**: {summary['total_issues']}\n\n")
+
+            f.write("## Summary by Tool\n")
+            for tool, count in summary['by_tool'].items():
+                f.write(f"- **{tool.replace('_', '-').title()}**: {count} issues\n")
+
+            f.write(f"\n## Summary by Severity\n")
+            for severity, count in summary['by_severity'].items():
+                if count > 0:
+                    f.write(f"- **{severity.title()}**: {count}\n")
+
+            if summary['total_issues'] == 0:
+                f.write(f"\n✅ **No security issues found!**\n")
+            elif risk_level in ['LOW', 'MEDIUM']:
+                f.write(f"\n⚠️ **Minor security issues found - review recommended**\n")
+            else:
+                f.write(f"\n🚨 **Security issues require immediate attention**\n")
+
+        print(f"\n=== SECURITY SUMMARY ===")
+        print(f"Risk Level: {risk_level}")
+        print(f"Total Issues: {summary['total_issues']}")
+        print(f"Critical: {summary['by_severity']['critical']}")
+        print(f"High: {summary['by_severity']['high']}")
+        print(f"Medium: {summary['by_severity']['medium']}")
+        print(f"Low: {summary['by_severity']['low']}")
+        EOF
+
+    - name: Upload SARIF results to GitHub
+      if: always()
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: |
+          bandit-results.sarif
+          results.sarif
+
+    - name: Upload security artifacts
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: security-scan-results
+        path: |
+          bandit-results.json
+          safety-results.json
+          pip-audit-results.json
+          security-summary.json
+          security-summary.md
+          secret-check.txt
+        retention-days: 90
+
+    - name: Comment PR with security results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+
+          try {
+            const summary = fs.readFileSync('security-summary.md', 'utf8');
+
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## 🔒 Security Scan Results\n\n' + summary
+            });
+          } catch (error) {
+            console.log('Could not post security summary:', error);
+          }
+
+    - name: Fail on critical vulnerabilities
+      run: |
+        # Read the summary and fail if critical issues found
+        CRITICAL_COUNT=$(python -c "
+        import json
+        try:
+            with open('security-summary.json', 'r') as f:
+                data = json.load(f)
+            print(data['by_severity']['critical'])
+        except:
+            print('0')
+        ")
+
+        HIGH_COUNT=$(python -c "
+        import json
+        try:
+            with open('security-summary.json', 'r') as f:
+                data = json.load(f)
+            print(data['by_severity']['high'])
+        except:
+            print('0')
+        ")
+
+        if [ "$CRITICAL_COUNT" -gt 0 ]; then
+          echo "❌ Found $CRITICAL_COUNT critical security issues!"
+          echo "Security scan failed due to critical vulnerabilities."
+          exit 1
+        elif [ "$HIGH_COUNT" -gt 5 ]; then
+          echo "⚠️ Found $HIGH_COUNT high-severity security issues!"
+          echo "Consider addressing high-severity issues before merging."
+          # Don't fail the build for high-severity, just warn
+        fi
+
+        echo "✅ Security scan completed successfully!"

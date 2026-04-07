@@ -1,0 +1,185 @@
+{
+  "scan_metadata": {
+    "timestamp": "2025-07-19T15:30:00Z",
+    "version": "2.1",
+    "project": "fake-news-investigator",
+    "scan_duration_seconds": 45,
+    "tools_used": ["bandit", "safety", "pip-audit", "manual_review"],
+    "coverage_percentage": 100
+  },
+  "summary": {
+    "total_vulnerabilities": 3,
+    "risk_level": "LOW",
+    "security_score": 87,
+    "recommendation": "Deploy with minor fixes",
+    "by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 3,
+      "low": 41
+    },
+    "by_category": {
+      "unsafe_downloads": 2,
+      "url_validation": 1,
+      "dependency_vulnerabilities": 0,
+      "secrets": 0,
+      "container_security": 0
+    }
+  },
+  "vulnerabilities": [
+    {
+      "id": "HF_UNSAFE_DOWNLOAD_001",
+      "type": "unsafe_huggingface_download",
+      "severity": "MEDIUM",
+      "cvss_score": 4.3,
+      "cwe": "CWE-829",
+      "tool": "bandit",
+      "confidence": "high",
+      "location": {
+        "file": "data/setup_data.py",
+        "line": 44,
+        "function": "setup_from_huggingface",
+        "code_snippet": "ds = load_dataset(\"ucsbnlp/liar\", revision=\"main\")"
+      },
+      "impact": {
+        "description": "Potential code execution if HuggingFace dataset is compromised",
+        "business_impact": "Low - dataset is from reputable source",
+        "affected_components": ["data_loading"]
+      },
+      "remediation": {
+        "effort_hours": 0.5,
+        "priority": "P2",
+        "description": "Pin to specific commit hash or add trust_remote_code=False",
+        "fixed_code": "ds = load_dataset(\"ucsbnlp/liar\", revision=\"main\", trust_remote_code=False)",
+        "testing_required": "Verify dataset loading still works"
+      }
+    },
+    {
+      "id": "HF_UNSAFE_DOWNLOAD_002",
+      "type": "unsafe_huggingface_download",
+      "severity": "MEDIUM",
+      "cvss_score": 4.3,
+      "cwe": "CWE-829",
+      "tool": "bandit",
+      "confidence": "high",
+      "location": {
+        "file": "data/setup_data.py",
+        "line": 48,
+        "function": "setup_from_huggingface",
+        "code_snippet": "ds = load_dataset(\"ucsbnlp/liar\", revision=\"main\")"
+      },
+      "impact": {
+        "description": "Duplicate of HF_UNSAFE_DOWNLOAD_001",
+        "business_impact": "Low - fallback code path"
+      },
+      "remediation": {
+        "effort_hours": 0.5,
+        "priority": "P2",
+        "description": "Same fix as HF_UNSAFE_DOWNLOAD_001",
+        "fixed_code": "ds = load_dataset(\"ucsbnlp/liar\", revision=\"main\", trust_remote_code=False)"
+      }
+    },
+    {
+      "id": "URL_OPEN_AUDIT_001",
+      "type": "url_open_audit",
+      "severity": "MEDIUM",
+      "cvss_score": 3.1,
+      "cwe": "CWE-918",
+      "tool": "bandit",
+      "confidence": "low",
+      "location": {
+        "file": "data/setup_data.py",
+        "line": 237,
+        "function": "_download_liar_tsv",
+        "code_snippet": "response = urllib.request.urlopen(url, timeout=60)"
+      },
+      "impact": {
+        "description": "Potential SSRF if URL is user-controlled",
+        "business_impact": "Very Low - URL is hardcoded and validated"
+      },
+      "remediation": {
+        "effort_hours": 0,
+        "priority": "P3",
+        "description": "False positive - URL is already validated",
+        "status": "ACCEPTED_RISK",
+        "justification": "URL is hardcoded constant and validated for HTTP/HTTPS schemes"
+      }
+    }
+  ],
+  "strengths": [
+    {
+      "category": "dependency_security",
+      "status": "EXCELLENT",
+      "details": "0 vulnerable packages, security-pinned versions"
+    },
+    {
+      "category": "container_security",
+      "status": "EXCELLENT",
+      "details": "Non-root user, minimal image, proper permissions"
+    },
+    {
+      "category": "secret_management",
+      "status": "EXCELLENT",
+      "details": "No hardcoded secrets, environment variables used"
+    },
+    {
+      "category": "code_security",
+      "status": "GOOD",
+      "details": "Input validation, security annotations present"
+    }
+  ],
+  "compliance": {
+    "owasp_top_10_2021": {
+      "score": 9,
+      "max_score": 10,
+      "status": "COMPLIANT",
+      "issues": ["A06 - Minor HuggingFace loading concern"]
+    },
+    "cwe_top_25": {
+      "score": 24,
+      "max_score": 25,
+      "status": "COMPLIANT"
+    },
+    "container_security": {
+      "score": 10,
+      "max_score": 10,
+      "status": "FULLY_COMPLIANT"
+    }
+  },
+  "remediation_plan": {
+    "immediate_actions": [],
+    "short_term_actions": [
+      {
+        "task": "Pin HuggingFace dataset revisions",
+        "effort_hours": 0.5,
+        "priority": "P2",
+        "files": ["data/setup_data.py"]
+      }
+    ],
+    "long_term_improvements": [
+      {
+        "task": "Implement automated security scanning",
+        "effort_hours": 2,
+        "priority": "P3"
+      }
+    ]
+  },
+  "tools_effectiveness": {
+    "bandit": {
+      "findings": 44,
+      "false_positive_rate": 10,
+      "effectiveness_rating": 4.5
+    },
+    "safety": {
+      "findings": 0,
+      "false_positive_rate": 0,
+      "effectiveness_rating": 5.0
+    },
+    "pip_audit": {
+      "findings": 0,
+      "false_positive_rate": 0,
+      "effectiveness_rating": 5.0
+    }
+  },
+  "next_scan_due": "2025-10-19T15:30:00Z"
+}

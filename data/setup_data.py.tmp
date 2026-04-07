@@ -45,7 +45,7 @@ def setup_from_huggingface():
     except Exception:
         # Fallback: try loading without scripts
         try:
-            ds = load_dataset("ucsbnlp/liar", revision="main", trust_remote_code=False)  # nosec B615
+            ds = load_dataset("ucsbnlp/liar", revision="main")  # nosec B615
         except Exception:
             # Final fallback: download TSV files directly
             print("HuggingFace loader failed. Downloading TSV files directly...")
