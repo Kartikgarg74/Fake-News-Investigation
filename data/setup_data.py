@@ -238,7 +238,7 @@ def _download_liar_tsv() -> bool:
         raise ValueError(f"Only HTTP/HTTPS URLs are allowed, got: {url}")
 
     try:
-        response = urllib.request.urlopen(url, timeout=60)  # nosec B310 — URL validated above
+        response = urllib.request.urlopen(url, timeout=60)  # nosec B310 # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected — URL scheme validated above
         zip_data = io.BytesIO(response.read())
     except Exception as e:
         print(f"Download failed: {e}")
