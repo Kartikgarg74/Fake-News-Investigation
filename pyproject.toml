@@ -14,7 +14,10 @@ dependencies = [
     "pydantic>=2.0.0,<3.0.0",
 ]
 
+[project.scripts]
+server = "fake_news_investigator.server.app:main"
+
 [project.optional-dependencies]
 baseline = [
-    "openai>=1.0.0,<2.0.0",
+    "openai>=2.7.2",
 ]

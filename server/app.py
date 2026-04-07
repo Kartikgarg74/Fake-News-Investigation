@@ -1,4 +1,5 @@
 """FastAPI server for the Fake News Investigator environment."""
+import os
 
 from openenv.core.env_server import create_fastapi_app
 
@@ -174,3 +175,18 @@ def run_baseline():
         }
 
     return {"baseline_results": results, "method": "heuristic (non-LLM)"}
+
+
+def main():
+    """Entry point for the OpenEnv server (required by [project.scripts])."""
+    import uvicorn
+    uvicorn.run(
+        "fake_news_investigator.server.app:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 8000)),
+        workers=1,
+    )
+
+
+if __name__ == "__main__":
+    main()
