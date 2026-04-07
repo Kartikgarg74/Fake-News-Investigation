@@ -10,7 +10,7 @@ class InvestigateAction(Action):
     action_type: str = Field(
         description=(
             "One of: request_source, cross_reference, "
-            "check_credibility, submit_verdict"
+            "check_credibility, submit_verdict, analyze_image"
         )
     )
     source_id: Optional[str] = Field(
@@ -69,6 +69,10 @@ class InvestigateObservation(Observation):
     )
     steps_taken: int = Field(default=0, description="Steps used so far")
     message: str = Field(default="", description="Feedback from the environment")
+    image_url: Optional[str] = Field(
+        default=None,
+        description="URL of associated image if this is a visual claim",
+    )
 
 
 class InvestigateState(State):

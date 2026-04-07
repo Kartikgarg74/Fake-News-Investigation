@@ -1,0 +1,142 @@
+# Security Configuration for Fake News Investigator
+# This file defines security policies and scanning configuration
+
+version: "1.0"
+project:
+  name: "fake-news-investigator"
+  description: "AI Training Environment for Fact-Checking"
+  criticality: "medium"  # Options: low, medium, high, critical
+
+# Security scanning configuration
+scanning:
+  # SAST (Static Application Security Testing)
+  sast:
+    tools:
+      - bandit
+      - semgrep
+    severity_threshold: "medium"  # Fail build on medium+ issues
+    exclude_paths:
+      - "__pycache__"
+      - "*.pyc"
+      - ".git"
+
+  # Dependency vulnerability scanning
+  dependencies:
+    tools:
+      - safety
+      - pip-audit
+    fail_on_vulnerability: true
+    auto_fix_minor: false  # Set to true to enable automated minor fixes
+
+  # Secret detection
+  secrets:
+    patterns:
+      - "(?i)(api[_-]?key|apikey|secret|password)\\s*[:=]\\s*[\"'][^\"']{8,}[\"']"
+      - "(?i)bearer\\s+[a-zA-Z0-9\\-\\._~\\+\\/]{20,}"
+      - "-----BEGIN (RSA |EC )?PRIVATE KEY-----"
+    exclude_files:
+      - "test_*.py"
+      - "*.md"
+
+# Container security configuration
+container:
+  base_image_policy: "minimal"  # Prefer slim/alpine images
+  non_root_user: true
+  read_only_filesystem: false  # Some apps need write access
+  drop_capabilities: ["ALL"]
+  add_capabilities: []  # Add only necessary capabilities
+
+# Compliance frameworks to check against
+compliance:
+  frameworks:
+    - "OWASP Top 10 2021"
+    - "CWE Top 25"
+
+  # Security requirements
+  requirements:
+    authentication: "required"
+    encryption_at_rest: "preferred"
+    encryption_in_transit: "required"
+    input_validation: "required"
+    output_encoding: "required"
+    logging: "required"
+
+# Risk thresholds
+risk_management:
+  acceptable_risk_level: "medium"
+
+  # Actions based on risk level
+  critical:
+    action: "block_deployment"
+    notification: "immediate"
+  high:
+    action: "require_approval"
+    notification: "within_4_hours"
+  medium:
+    action: "create_ticket"
+    notification: "within_24_hours"
+  low:
+    action: "log_only"
+    notification: "weekly_summary"
+
+# Incident response
+incident_response:
+  contacts:
+    - role: "security_lead"
+      notification_method: "email_and_slack"
+    - role: "development_lead"
+      notification_method: "email"
+
+  # Automated responses
+  automated_responses:
+    critical_vulnerability:
+      - "create_jira_ticket"
+      - "notify_security_team"
+      - "block_deployment"
+    dependency_vulnerability:
+      - "create_pr_for_update"
+      - "notify_developer"
+
+# Security monitoring
+monitoring:
+  log_security_events: true
+  metrics_collection: true
+
+  # Key metrics to track
+  metrics:
+    - "authentication_failures"
+    - "authorization_failures"
+    - "input_validation_failures"
+    - "rate_limit_violations"
+
+# Development security practices
+development:
+  # Pre-commit hooks
+  pre_commit_hooks:
+    - "bandit"
+    - "secret_detection"
+
+  # Code review requirements
+  code_review:
+    security_review_required: true
+    min_reviewers: 1
+    security_champion_review: false  # Set to true if you have security champions
+
+  # Training requirements
+  training:
+    security_training_required: false
+    frequency: "annual"
+
+# Exceptions and waivers
+exceptions:
+  # Known false positives or accepted risks
+  - id: "URL_OPEN_AUDIT_001"
+    reason: "URL is hardcoded and validated for HTTP/HTTPS schemes only"
+    expiry: "2025-12-31"
+    approver: "security_lead"
+
+  # Temporarily accepted risks
+  - id: "HF_UNSAFE_DOWNLOAD"
+    reason: "Using reputable dataset source, will fix in next sprint"
+    expiry: "2025-08-01"
+    approver: "tech_lead"

@@ -33,6 +33,7 @@ SOURCE_CATEGORIES = [
     "statistical_reports",
     "international_organizations",
     "industry_reports",
+    "image_analysis",  # Visual evidence from associated images
 ]
 
 
@@ -42,6 +43,7 @@ class ClaimManager:
     def __init__(self, db_path: Optional[str] = None):
         self.db_path = db_path or str(DATA_DIR / "claims.db")
         self._ensure_db()
+        self._migrate_db()
 
     def _ensure_db(self):
         """Create claims DB if it doesn't exist (uses built-in sample data)."""
@@ -63,7 +65,8 @@ class ClaimManager:
                 difficulty TEXT NOT NULL,
                 gold_evidence TEXT DEFAULT '[]',
                 gold_reasoning TEXT DEFAULT '',
-                evidence_passages TEXT DEFAULT '{}'
+                evidence_passages TEXT DEFAULT '{}',
+                image_url TEXT DEFAULT NULL
             )
         """)
 
@@ -72,12 +75,21 @@ class ClaimManager:
         cur.executemany(
             """INSERT OR IGNORE INTO claims
                (id, claim, label, speaker, topic, difficulty,
-                gold_evidence, gold_reasoning, evidence_passages)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                gold_evidence, gold_reasoning, evidence_passages, image_url)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             sample_claims,
         )
         conn.commit()
         conn.close()
+
+    def _migrate_db(self):
+        """Add new columns to existing databases (safe no-op if already present)."""
+        with sqlite3.connect(self.db_path) as conn:
+            try:
+                conn.execute("ALTER TABLE claims ADD COLUMN image_url TEXT DEFAULT NULL")
+                conn.commit()
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
     def get_random_claim(self, difficulty: str = "easy") -> Dict[str, Any]:
         """Pick a random claim from the specified difficulty tier."""
@@ -105,6 +117,7 @@ class ClaimManager:
             "gold_evidence": json.loads(row["gold_evidence"]),
             "gold_reasoning": row["gold_reasoning"],
             "evidence_passages": json.loads(row["evidence_passages"]),
+            "image_url": row["image_url"],
         }
 
     def get_claim_count(self, difficulty: Optional[str] = None) -> int:
@@ -306,6 +319,113 @@ class ClaimManager:
                     "international_organizations": "The IEA confirms that on a global average basis, EVs produce significantly fewer lifecycle emissions, but acknowledges regional variation based on electricity generation mix.",
                 }),
             ),
+            # === VISUAL: Multimedia/image-based claims ===
+            (
+                "visual_001",
+                "This photograph shows flooding in New York City caused by Hurricane Sandy in 2012.",
+                "false",
+                "Social media",
+                "disaster",
+                "easy",
+                json.dumps(["image_analysis", "fact_checks"]),
+                "The photograph actually shows flooding in Bangkok, Thailand during the Great Flood of 2011 — a full year before Hurricane Sandy. The image has been widely misattributed on social media by cropping out location context and reposting with false captions.",
+                json.dumps({
+                    "image_analysis": (
+                        "The image shows extreme urban flooding with vehicles fully submerged "
+                        "and multi-story buildings surrounded by water. Reverse image search and "
+                        "EXIF metadata analysis confirms this photograph was taken in Bangkok, "
+                        "Thailand during the Great Flood of 2011, approximately one year before "
+                        "Hurricane Sandy struck the US East Coast. Thai-language signage is "
+                        "partially visible on storefronts in the background. This image has been "
+                        "documented by Snopes, AFP Fact Check, and Reuters as a repeatedly "
+                        "misattributed photograph."
+                    ),
+                    "fact_checks": (
+                        "Snopes and AFP Fact Check have both documented this specific image as "
+                        "originating from the 2011 Thailand floods, not Hurricane Sandy. "
+                        "The photograph has been misattributed dozens of times across different "
+                        "natural disasters, each time with a new false caption."
+                    ),
+                }),
+                "https://upload.wikimedia.org/wikipedia/commons/a/a8/2011_Thailand_flooding_Nakhon_Ratchasima.jpg",
+            ),
+            (
+                "visual_002",
+                "This chart proves crime has skyrocketed 400% in the last two years.",
+                "half-true",
+                "Political commentator",
+                "crime",
+                "hard",
+                json.dumps(["image_analysis", "statistical_reports", "government_data"]),
+                "The chart uses a truncated Y-axis starting at 950 rather than 0, making a modest increase from 980 to 1,020 cases appear as a near-vertical spike. The underlying data is real — crime did increase — but the visual presentation is deliberately misleading. The actual percentage increase is approximately 4%, not 400%.",
+                json.dumps({
+                    "image_analysis": (
+                        "The chart displays crime statistics for a major metropolitan area. "
+                        "Critical observation: the Y-axis begins at 950, not at 0. This truncation "
+                        "makes a change from approximately 980 to 1,020 incidents appear as a "
+                        "dramatic near-vertical increase occupying the full chart height. When "
+                        "the same data is plotted on a zero-baseline axis, the increase is visually "
+                        "modest. The chart lacks a source attribution, confidence intervals, or "
+                        "methodology notes. The '400%' figure in the claim does not correspond to "
+                        "any value visible in the chart — it appears to be fabricated. The actual "
+                        "change represented is approximately 4.1%."
+                    ),
+                    "statistical_reports": (
+                        "Bureau of Justice Statistics data for the referenced period shows a "
+                        "modest single-digit percentage increase in the crime category displayed. "
+                        "Statisticians flag truncated Y-axes as a common technique for "
+                        "exaggerating trends in data visualizations."
+                    ),
+                    "government_data": (
+                        "FBI Uniform Crime Report data does not support a 400% increase in any "
+                        "major crime category over a two-year period for any US jurisdiction. "
+                        "The largest documented increases for any specific category in any city "
+                        "were in the range of 20-40% during post-pandemic spikes."
+                    ),
+                }),
+                None,  # No specific image URL — visual_002 uses a described hypothetical chart
+            ),
+            (
+                "visual_003",
+                "Leaked photo shows a government official signing a secret executive order banning protests.",
+                "pants-fire",
+                "Anonymous social media account",
+                "politics",
+                "hard",
+                json.dumps(["image_analysis", "fact_checks", "news_articles"]),
+                "The photograph is AI-generated. Multiple visual forensic indicators confirm this: inconsistent lighting on hands, illegible background text (a hallmark of generative AI), mismatched shadow directions, and unnatural skin texture artifacts. No credible news outlet reported such an executive order, and official government records contain no such document.",
+                json.dumps({
+                    "image_analysis": (
+                        "Forensic visual analysis reveals multiple indicators consistent with "
+                        "AI image generation: (1) The subject's hands show inconsistent lighting "
+                        "that does not match the room's light source direction. (2) Text visible "
+                        "on documents in the background is partially illegible and contains "
+                        "nonsensical character sequences — a known artifact of diffusion models. "
+                        "(3) Shadow directions for the subject and background objects are "
+                        "inconsistent, suggesting composite generation. (4) Skin texture on the "
+                        "subject's face shows unnatural smoothness with periodic repetitive "
+                        "patterns typical of GAN or diffusion model outputs. (5) The document "
+                        "being 'signed' has no legible text despite being in sharp focus. "
+                        "Multiple AI detection tools (Hive Moderation, AI or Not) classify "
+                        "this image as AI-generated with >95% confidence."
+                    ),
+                    "fact_checks": (
+                        "PolitiFact, Snopes, and Reuters Fact Check have all investigated this "
+                        "image. All three concluded it is AI-generated and no executive order "
+                        "matching the claim exists in official government records. The account "
+                        "that originally posted it has a history of sharing AI-generated "
+                        "political content."
+                    ),
+                    "news_articles": (
+                        "No major news outlet — including those critical of the official in "
+                        "question — reported on any executive order banning protests. The absence "
+                        "of coverage across the full spectrum of political media is strong "
+                        "evidence that the event depicted did not occur."
+                    ),
+                }),
+                None,
+            ),
         ]
-        return claims
+        # Ensure all tuples have image_url as 10th element (None for text-only claims)
+        return [c if len(c) == 10 else c + (None,) for c in claims]
 

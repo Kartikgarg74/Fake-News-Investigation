@@ -51,7 +51,11 @@ Available actions (respond with VALID JSON only, no markdown, no explanation):
 3. Check source credibility:
    {"action_type": "check_credibility", "source_id": "<source_name_or_url>"}
 
-4. Submit your final verdict:
+4. Analyze associated image (if the claim has an image_url):
+   {"action_type": "analyze_image"}
+   Use this when the observation includes an image_url — returns visual forensic analysis.
+
+5. Submit your final verdict:
    {"action_type": "submit_verdict", "verdict": "<LABEL>",
     "evidence": ["source1", "source2"],
     "confidence": 0.0-1.0,
@@ -59,6 +63,7 @@ Available actions (respond with VALID JSON only, no markdown, no explanation):
    Labels: TRUE, MOSTLY_TRUE, HALF_TRUE, MOSTLY_FALSE, FALSE, PANTS_ON_FIRE
 
 Strategy:
+- If the claim has an image_url, call analyze_image as your FIRST action
 - Start by requesting fact_checks or government_data
 - Cross-reference the claim against authoritative sources
 - Check credibility of any suspicious sources
@@ -101,10 +106,11 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
     obs = env.reset(task=task)
     initial_budget = obs.budget_remaining
 
+    image_note = f"\nAssociated image: {obs.image_url}" if obs.image_url else ""
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": (
-            f"CLAIM TO INVESTIGATE: \"{obs.claim}\"\n\n"
+            f"CLAIM TO INVESTIGATE: \"{obs.claim}\"{image_note}\n\n"
             f"Available source categories: {', '.join(obs.available_sources)}\n"
             f"Investigation budget: {obs.budget_remaining} steps\n\n"
             f"Begin your investigation. Respond with a JSON action."
