@@ -1,21 +1,29 @@
 FROM python:3.11-slim
 
-WORKDIR /app
+# Security: create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-# Install system dependencies
+# Install system dependencies and remove them after pip install
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
+WORKDIR /app
+
 # Copy and install Python dependencies
 COPY server/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt && \
+    apt-get purge -y --auto-remove build-essential
 
-# Copy the entire package
-COPY . /app/fake_news_investigator/
+# Copy the entire package with correct ownership
+COPY --chown=appuser:appuser . /app/fake_news_investigator/
 
 # Set Python path so the package is importable
 ENV PYTHONPATH=/app
+
+# Security: drop to non-root user
+USER appuser
 
 # Expose port
 EXPOSE 8000

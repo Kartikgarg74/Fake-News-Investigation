@@ -397,7 +397,7 @@ class FakeNewsEnvironment(
         import random
         noisy = {}
         for key, val in scores.items():
-            noisy[key] = max(0.0, min(1.0, val + random.uniform(-noise_range, noise_range)))
+            noisy[key] = max(0.0, min(1.0, val + random.uniform(-noise_range, noise_range)))  # nosec B311 — non-cryptographic game noise
         # Re-normalize to sum to 1.0
         total = sum(noisy.values())
         if total > 0:

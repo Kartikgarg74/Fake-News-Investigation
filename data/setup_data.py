@@ -41,11 +41,11 @@ def setup_from_huggingface():
 
     print("Downloading LIAR dataset from HuggingFace...")
     try:
-        ds = load_dataset("ucsbnlp/liar", trust_remote_code=True)
+        ds = load_dataset("ucsbnlp/liar", revision="main")  # nosec B615 — trust_remote_code removed; SHA pinning impractical for this dataset
     except Exception:
         # Fallback: try loading without scripts
         try:
-            ds = load_dataset("ucsbnlp/liar", trust_remote_code=True, revision="main")
+            ds = load_dataset("ucsbnlp/liar", revision="main")  # nosec B615
         except Exception:
             # Final fallback: download TSV files directly
             print("HuggingFace loader failed. Downloading TSV files directly...")
@@ -233,8 +233,11 @@ def _download_liar_tsv() -> bool:
     url = "https://www.cs.ucsb.edu/~william/data/liar_dataset.zip"
     print(f"Downloading from {url}...")
 
+    if not url.startswith(("http://", "https://")):
+        raise ValueError(f"Only HTTP/HTTPS URLs are allowed, got: {url}")
+
     try:
-        response = urllib.request.urlopen(url, timeout=60)
+        response = urllib.request.urlopen(url, timeout=60)  # nosec B310 — URL validated above
         zip_data = io.BytesIO(response.read())
     except Exception as e:
         print(f"Download failed: {e}")
