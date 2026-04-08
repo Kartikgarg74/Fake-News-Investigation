@@ -25,9 +25,6 @@ from fake_news_investigator.server.environment import FakeNewsEnvironment
 # =========================================================================
 # MANDATORY environment variables — validator injects API_KEY + API_BASE_URL
 # =========================================================================
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.environ.get("API_KEY") or os.environ.get("API_KEY") or ""
-LOCAL_IMAGE_NAME = os.environ.get("LOCAL_IMAGE_NAME")
 MODEL_NAME = os.environ.get("MODEL_NAME", "meta-llama/Llama-3.3-70B-Instruct")
 
 MAX_STEPS = 8
@@ -137,8 +134,9 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
         except Exception as exc:
             error_msg = str(exc)[:200]
             # Redact any API keys that might appear in error messages
-            if API_KEY and API_KEY in error_msg:
-                error_msg = error_msg.replace(API_KEY, "***REDACTED***")
+            _key = os.environ.get("API_KEY", "")
+            if _key and _key in error_msg:
+                error_msg = error_msg.replace(_key, "***REDACTED***")
             print(f"  LLM request failed: {error_msg}. Submitting fallback verdict.")
             obs = env.step(InvestigateAction(
                 action_type="submit_verdict",
@@ -206,20 +204,31 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
 
 
 def main():
+    # Read validator-injected variables directly (they guarantee these exist)
+    api_base_url = os.environ.get("API_BASE_URL", "")
+    api_key = os.environ.get("API_KEY", "")
+
     print("=" * 60, flush=True)
     print("Fake News Investigator — Inference Script", flush=True)
     print("=" * 60, flush=True)
-    print(f"API_BASE_URL: {API_BASE_URL}", flush=True)
+    print(f"API_BASE_URL set: {bool(api_base_url)} ({api_base_url[:40]}...)" if api_base_url else "API_BASE_URL: NOT SET", flush=True)
+    print(f"API_KEY set: {bool(api_key)}", flush=True)
     print(f"MODEL_NAME: {MODEL_NAME}", flush=True)
-    print(f"API_KEY source: {'API_KEY env' if os.environ.get('API_KEY') else 'HF_TOKEN env' if os.environ.get('HF_TOKEN') else 'NONE'}", flush=True)
-    print(f"API_KEY set: {bool(API_KEY)}", flush=True)
     print(flush=True)
 
-    if not API_KEY:
-        print("WARNING: Neither API_KEY nor HF_TOKEN is set. Falling back to heuristic.", flush=True)
-        return run_heuristic_fallback()
+    if not api_key:
+        # Fallback for local development only
+        api_key = os.environ.get("HF_TOKEN", "")
+        if not api_base_url:
+            api_base_url = "https://router.huggingface.co/v1"
+        if not api_key:
+            print("WARNING: No API_KEY or HF_TOKEN found. Running heuristic.", flush=True)
+            return run_heuristic_fallback()
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # Initialize OpenAI client with validator-provided credentials
+    client = OpenAI(base_url=api_base_url, api_key=api_key)
+    print(f"OpenAI client initialized: base_url={api_base_url}", flush=True)
+
     try:
         env = FakeNewsEnvironment()
     except Exception as exc:
