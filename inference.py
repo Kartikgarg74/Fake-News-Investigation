@@ -105,8 +105,8 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
         obs = env.reset(task=task)
     except Exception as exc:
         print(f"  env.reset() failed: {exc}")
-        print(f"[END] task={task} score=0.0 steps=0", flush=True)
-        return 0.0
+        print(f"[END] task={task} score=0.0001 steps=0", flush=True)
+        return 0.0001
     initial_budget = obs.budget_remaining
 
     image_note = f"\nAssociated image: {obs.image_url}" if obs.image_url else ""
@@ -146,7 +146,7 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
                 reasoning="Investigation incomplete due to LLM error.",
             ))
             step_count += 1
-            print(f"[STEP] step={step_count} reward={obs.reward if obs.reward is not None else 0.0:.4f}", flush=True)
+            print(f"[STEP] step={step_count} reward={obs.reward if obs.reward is not None else 0.0001:.4f}", flush=True)
             break
 
         action_data = extract_json_action(response_text)
@@ -160,14 +160,14 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
                 reasoning="Unable to parse investigation action.",
             ))
             step_count += 1
-            print(f"[STEP] step={step_count} reward={obs.reward if obs.reward is not None else 0.0:.4f}", flush=True)
+            print(f"[STEP] step={step_count} reward={obs.reward if obs.reward is not None else 0.0001:.4f}", flush=True)
             break
 
         try:
             action = InvestigateAction(**action_data)
             obs = env.step(action)
             step_count += 1
-            print(f"[STEP] step={step_count} reward={obs.reward if obs.reward is not None else 0.0:.4f}", flush=True)
+            print(f"[STEP] step={step_count} reward={obs.reward if obs.reward is not None else 0.0001:.4f}", flush=True)
         except Exception as exc:
             print(f"  Invalid action: {exc}. Submitting fallback.")
             obs = env.step(InvestigateAction(
@@ -178,7 +178,7 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
                 reasoning=f"Invalid action: {str(exc)[:100]}",
             ))
             step_count += 1
-            print(f"[STEP] step={step_count} reward={obs.reward if obs.reward is not None else 0.0:.4f}", flush=True)
+            print(f"[STEP] step={step_count} reward={obs.reward if obs.reward is not None else 0.0001:.4f}", flush=True)
             break
 
         # Add to conversation
@@ -198,7 +198,7 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
 
         messages.append({"role": "user", "content": feedback})
 
-    final_score = obs.reward if obs.reward is not None else 0.0
+    final_score = obs.reward if obs.reward is not None else 0.0001
     print(f"[END] task={task} score={final_score:.4f} steps={step_count}", flush=True)
     return final_score
 
@@ -263,11 +263,11 @@ def main():
                 score = run_episode(client, env, task)
             except Exception as exc:
                 print(f"  Episode {ep+1} failed: {exc}. Score: 0.0")
-                score = 0.0
+                score = 0.0001
             scores.append(score)
             print(f"  Episode {ep+1}: score={score:.4f}")
 
-        avg = sum(scores) / len(scores) if scores else 0.0
+        avg = sum(scores) / len(scores) if scores else 0.0001
         all_results[task] = {
             "average_score": round(avg, 4),
             "min_score": round(min(scores), 4) if scores else 0,
@@ -297,7 +297,7 @@ def run_heuristic_fallback():
                 obs = env.reset(task=task)
             except Exception as exc:
                 print(f"  env.reset() failed: {exc}")
-                print(f"[END] task={task} score=0.0 steps=0", flush=True)
+                print(f"[END] task={task} score=0.0001 steps=0", flush=True)
                 continue
             obs = env.step(InvestigateAction(
                 action_type="request_source", source_id="fact_checks"))
@@ -327,13 +327,13 @@ def run_heuristic_fallback():
                 confidence=conf,
                 reasoning=f"Heuristic: {'contradiction' if has_contradiction else 'support' if has_support else 'ambiguous'} detected.",
             ))
-            ep_score = obs.reward if obs.reward is not None else 0.0
+            ep_score = obs.reward if obs.reward is not None else 0.0001
             print(f"[STEP] step=2 reward={ep_score:.4f}", flush=True)
             print(f"[END] task={task} score={ep_score:.4f} steps=2", flush=True)
             if obs.reward is not None:
                 scores.append(obs.reward)
 
-        avg = sum(scores) / len(scores) if scores else 0.0
+        avg = sum(scores) / len(scores) if scores else 0.0001
         all_results[task] = {
             "average_score": round(avg, 4),
             "episodes": len(scores),

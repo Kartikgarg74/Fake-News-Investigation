@@ -159,7 +159,7 @@ def compute_reward(
         + 0.15 * reasoning_sc
         - penalties
     )
-    total = round(max(0.0, min(1.0, total)), 4)
+    total = round(max(0.0001, min(0.9999, total)), 4)
 
     return {
         "total": total,
