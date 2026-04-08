@@ -41,7 +41,18 @@ class ClaimManager:
     """Manages the claims database and evidence mappings."""
 
     def __init__(self, db_path: Optional[str] = None):
-        self.db_path = db_path or str(DATA_DIR / "claims.db")
+        if db_path is None:
+            default = DATA_DIR / "claims.db"
+            # Fall back to /tmp if the default path is in a read-only location
+            if default.exists():
+                db_path = str(default)
+            else:
+                try:
+                    default.parent.mkdir(parents=True, exist_ok=True)
+                    db_path = str(default)
+                except (PermissionError, OSError):
+                    db_path = "/tmp/fake_news_claims.db"
+        self.db_path = db_path
         self._ensure_db()
         self._migrate_db()
 
