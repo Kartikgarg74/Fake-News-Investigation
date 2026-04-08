@@ -83,13 +83,16 @@ class ClaimManager:
         conn.close()
 
     def _migrate_db(self):
-        """Add new columns to existing databases (safe no-op if already present)."""
-        with sqlite3.connect(self.db_path) as conn:
-            try:
-                conn.execute("ALTER TABLE claims ADD COLUMN image_url TEXT DEFAULT NULL")
-                conn.commit()
-            except sqlite3.OperationalError:
-                pass  # Column already exists
+        """Add new columns to existing databases (safe no-op if already present or read-only)."""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                try:
+                    conn.execute("ALTER TABLE claims ADD COLUMN image_url TEXT DEFAULT NULL")
+                    conn.commit()
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+        except Exception:
+            pass  # DB path not writable (e.g., read-only install path) — skip migration
 
     def get_random_claim(self, difficulty: str = "easy") -> Dict[str, Any]:
         """Pick a random claim from the specified difficulty tier."""
