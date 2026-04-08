@@ -204,30 +204,47 @@ def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
 
 
 def main():
-    # Read validator-injected variables directly (they guarantee these exist)
-    api_base_url = os.environ.get("API_BASE_URL", "")
-    api_key = os.environ.get("API_KEY", "")
-
+    # Debug: dump all relevant env vars so we can see what the validator injects
     print("=" * 60, flush=True)
     print("Fake News Investigator — Inference Script", flush=True)
     print("=" * 60, flush=True)
-    print(f"API_BASE_URL set: {bool(api_base_url)} ({api_base_url[:40]}...)" if api_base_url else "API_BASE_URL: NOT SET", flush=True)
-    print(f"API_KEY set: {bool(api_key)}", flush=True)
-    print(f"MODEL_NAME: {MODEL_NAME}", flush=True)
+    print("Environment variables:", flush=True)
+    for k, v in sorted(os.environ.items()):
+        kup = k.upper()
+        if any(x in kup for x in ["API", "KEY", "TOKEN", "URL", "MODEL", "HF_", "OPENAI"]):
+            # Show first 20 chars of value for debugging (redact the rest)
+            safe_v = (v[:20] + "...") if len(v) > 20 else v
+            print(f"  {k}={safe_v}", flush=True)
+    print(flush=True)
+
+    # Read validator-injected variables (they inject API_KEY + API_BASE_URL)
+    api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or ""
+    api_base_url = os.environ.get("API_BASE_URL") or "https://router.huggingface.co/v1"
+
+    print(f"Using API_BASE_URL: {api_base_url}", flush=True)
+    print(f"Using API_KEY: {'yes (' + str(len(api_key)) + ' chars)' if api_key else 'NO'}", flush=True)
+    print(f"Using MODEL_NAME: {MODEL_NAME}", flush=True)
     print(flush=True)
 
     if not api_key:
-        # Fallback for local development only
-        api_key = os.environ.get("HF_TOKEN", "")
-        if not api_base_url:
-            api_base_url = "https://router.huggingface.co/v1"
-        if not api_key:
-            print("WARNING: No API_KEY or HF_TOKEN found. Running heuristic.", flush=True)
-            return run_heuristic_fallback()
+        print("WARNING: No API_KEY or HF_TOKEN found. Running heuristic.", flush=True)
+        return run_heuristic_fallback()
 
     # Initialize OpenAI client with validator-provided credentials
     client = OpenAI(base_url=api_base_url, api_key=api_key)
-    print(f"OpenAI client initialized: base_url={api_base_url}", flush=True)
+
+    # Verify proxy connectivity with a minimal test call
+    print("Testing proxy connection...", flush=True)
+    try:
+        test = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "user", "content": "Say OK"}],
+            max_tokens=5,
+        )
+        print(f"Proxy OK: {test.choices[0].message.content}", flush=True)
+    except Exception as e:
+        print(f"Proxy test failed: {e}", flush=True)
+        # Continue anyway — individual episode errors are handled
 
     try:
         env = FakeNewsEnvironment()
