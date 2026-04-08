@@ -103,7 +103,11 @@ def extract_json_action(text: str) -> dict:
 
 def run_episode(client: OpenAI, env: FakeNewsEnvironment, task: str) -> float:
     """Run a single investigation episode."""
-    obs = env.reset(task=task)
+    try:
+        obs = env.reset(task=task)
+    except Exception as exc:
+        print(f"  env.reset() failed: {exc}")
+        return 0.0
     initial_budget = obs.budget_remaining
 
     image_note = f"\nAssociated image: {obs.image_url}" if obs.image_url else ""
@@ -215,7 +219,11 @@ def main():
         scores = []
 
         for ep in range(episodes_per_task):
-            score = run_episode(client, env, task)
+            try:
+                score = run_episode(client, env, task)
+            except Exception as exc:
+                print(f"  Episode {ep+1} failed: {exc}. Score: 0.0")
+                score = 0.0
             scores.append(score)
             print(f"  Episode {ep+1}: score={score:.4f}")
 
@@ -244,7 +252,11 @@ def run_heuristic_fallback():
     for task in ["easy", "medium", "hard"]:
         scores = []
         for _ in range(5):
-            obs = env.reset(task=task)
+            try:
+                obs = env.reset(task=task)
+            except Exception as exc:
+                print(f"  env.reset() failed: {exc}")
+                continue
             obs = env.step(InvestigateAction(
                 action_type="request_source", source_id="fact_checks"))
 

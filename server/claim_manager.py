@@ -110,17 +110,29 @@ class ClaimManager:
 
         import json
 
+        # Convert to plain dict — safe access for columns that may be missing
+        # (e.g. image_url absent in DBs created before the multimedia feature)
+        row_dict = dict(row)
+
+        def _safe_json(val, default):
+            if val is None:
+                return default
+            try:
+                return json.loads(val)
+            except (json.JSONDecodeError, TypeError):
+                return default
+
         return {
-            "id": row["id"],
-            "claim": row["claim"],
-            "label": row["label"],
-            "speaker": row["speaker"],
-            "topic": row["topic"],
-            "difficulty": row["difficulty"],
-            "gold_evidence": json.loads(row["gold_evidence"]),
-            "gold_reasoning": row["gold_reasoning"],
-            "evidence_passages": json.loads(row["evidence_passages"]),
-            "image_url": row["image_url"],
+            "id": row_dict.get("id", ""),
+            "claim": row_dict.get("claim", ""),
+            "label": row_dict.get("label", "false"),
+            "speaker": row_dict.get("speaker", ""),
+            "topic": row_dict.get("topic", ""),
+            "difficulty": row_dict.get("difficulty", difficulty),
+            "gold_evidence": _safe_json(row_dict.get("gold_evidence"), []),
+            "gold_reasoning": row_dict.get("gold_reasoning", ""),
+            "evidence_passages": _safe_json(row_dict.get("evidence_passages"), {}),
+            "image_url": row_dict.get("image_url"),  # None if column missing or NULL
         }
 
     def get_claim_count(self, difficulty: Optional[str] = None) -> int:
