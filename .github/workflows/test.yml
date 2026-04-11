@@ -1,0 +1,92 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs when a new commit lands on the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Pytest (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: server/requirements.txt
+
+      - name: Install system deps for Pillow
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libjpeg-dev zlib1g-dev
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r server/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Run tests
+        # VERITAS_LIVE_TESTS is NOT set, so live network tests are skipped
+        # on CI for speed and determinism. Set it manually to run them.
+        run: |
+          pytest tests/ -v --tb=short --cov=fake_news_investigator --cov-report=term-missing
+
+      - name: Upload coverage report
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: .coverage
+          retention-days: 7
+
+  validator-sanity:
+    name: Validator sanity checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check inference.py format regressions
+        run: |
+          # Replicates the 5-check script from memory — fails the build if
+          # any of the validator patterns regress in inference.py
+          set -e
+          if grep -nE 'reward=0\.0[^0-9]|score=0\.0[^0-9]' inference.py; then
+            echo "FAIL: bare 0.0 score literals found in inference.py"
+            exit 1
+          fi
+          if grep -nE 'return 0\.0$' inference.py; then
+            echo "FAIL: 'return 0.0' found in inference.py"
+            exit 1
+          fi
+          if ! grep -qE 'os.environ.get\("API_KEY"|os.environ\["API_KEY"\]' inference.py; then
+            echo "FAIL: inference.py does not read API_KEY from os.environ"
+            exit 1
+          fi
+          count=$(grep -c 'flush=True' inference.py)
+          if [ "$count" -lt 10 ]; then
+            echo "FAIL: not enough flush=True calls (got $count, need >= 10)"
+            exit 1
+          fi
+          if ! grep -qE 'max\(0\.01, min\(0\.99' server/grading_engine.py; then
+            echo "FAIL: grading_engine does not clamp to (0.01, 0.99)"
+            exit 1
+          fi
+          echo "PASS: all 5 validator sanity checks"

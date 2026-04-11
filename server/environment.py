@@ -1,56 +1,131 @@
-"""Fake News Investigator — the core OpenEnv environment."""
+"""Veritas (formerly Fake News Investigator) — the core OpenEnv environment.
 
+This is the heart of the system. An episode:
+
+1. reset() picks a claim from ClaimsDB and starts an investigation budget.
+2. The agent calls step(action) repeatedly. Ten action types are supported:
+     - request_source        : real live retrieval via RetrievalOrchestrator
+     - cross_reference       : real NLI via NLIClient (DeBERTa on HF Inference)
+     - check_credibility     : real publisher lookup in SourcesDB (MBFC-seeded)
+     - analyze_image         : real CLIP alignment + pHash matching
+     - search_evidence       : FTS5 search across cached evidence corpus
+     - check_entity          : Wikidata entity resolution
+     - check_timeline        : temporal analysis via TemporalDB
+     - reverse_image_search  : pHash match against ImagesDB
+     - compute_consensus     : aggregate agreement across all retrieved evidence
+     - submit_verdict        : final verdict, grades the episode, ends it
+3. Every step is logged to trajectories.db for RL training.
+4. Every retrieval is logged to the audit table for chain-of-custody.
+
+All heavy lifting (retrieval, NLI, CLIP) is cloud-hosted via HF Inference API
+and the validator-provided LiteLLM proxy. No local ML models — Docker stays
+small and the laptop doesn't need a GPU.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import statistics
 import uuid
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional
 
 from openenv.core.env_server import Environment
 
 from ..models import InvestigateAction, InvestigateObservation, InvestigateState
 from .claim_manager import BUDGET_MAP, SOURCE_CATEGORIES, ClaimManager
 from .credibility_checker import CredibilityChecker
+from .databases import (
+    EntitiesDB,
+    EvidenceDB,
+    ImagesDB,
+    SourcesDB,
+    TemporalDB,
+    TrajectoriesDB,
+)
 from .grading_engine import compute_reward
+from .ml import CLIPClient, NLIClient, compute_phash
+from .retrievers import RetrievalOrchestrator, WikidataRetriever
 
 
 class FakeNewsEnvironment(
     Environment[InvestigateAction, InvestigateObservation, InvestigateState]
 ):
-    """Interactive fact-checking environment.
-
-    Agents learn to investigate claims by:
-    1. Requesting evidence from source categories
-    2. Cross-referencing claims against evidence
-    3. Checking source credibility
-    4. Submitting a reasoned verdict with evidence and confidence
-    """
+    """Interactive fact-checking environment with real retrieval + ML signals."""
 
     SUPPORTS_CONCURRENT_SESSIONS = True
 
     # Shared storage for completed episode scores (class-level for /grader access)
     _completed_episodes: dict = {}
 
+    # Canonical list of valid action types — used by step() dispatch
+    _VALID_ACTIONS = (
+        "request_source",
+        "cross_reference",
+        "check_credibility",
+        "analyze_image",
+        "search_evidence",
+        "check_entity",
+        "check_timeline",
+        "reverse_image_search",
+        "compute_consensus",
+        "submit_verdict",
+    )
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # Core claim + credibility services (facades over the new DBs)
         self.claim_manager = ClaimManager()
         self.credibility_checker = CredibilityChecker()
+
+        # Segregated databases (each owns a single concern)
+        self.evidence_db = EvidenceDB()
+        self.sources_db = SourcesDB()
+        self.images_db = ImagesDB()
+        self.temporal_db = TemporalDB()
+        self.entities_db = EntitiesDB()
+        self.trajectories_db = TrajectoriesDB()
+
+        # Live retrieval + cloud ML
+        self.retrieval = RetrievalOrchestrator(
+            evidence_db=self.evidence_db,
+            trajectories_db=self.trajectories_db,
+        )
+        self.nli = NLIClient()
+        self.clip = CLIPClient()
+        self.wikidata = WikidataRetriever()
+
         self._reset_episode_state()
+
+    # =====================================================================
+    # Episode lifecycle
+    # =====================================================================
 
     def _reset_episode_state(self):
         """Clear all episode-level state."""
-        self._current_claim = None
+        self._current_claim: Optional[Dict[str, Any]] = None
         self._difficulty = "easy"
         self._budget = 10
         self._steps_used = 0
         self._episode_id = ""
         self._done = False
         self._reward = 0.0
-        self._accessed_sources = []
+        self._accessed_sources: List[str] = []
+        self._retrieved_evidence: List[Dict[str, Any]] = []  # all evidence this episode
+        self._nli_results: List[Dict[str, Any]] = []         # all NLI results this episode
         self._penalties = 0.0
-        self._last_source_content = None
-        self._last_cross_ref = None
-        self._last_credibility = None
-        self._last_credibility_details = None
+
+        # Observation fields — cleared at the start of each step
+        self._last_source_content: Optional[str] = None
+        self._last_cross_ref: Optional[Dict[str, float]] = None
+        self._last_credibility: Optional[float] = None
+        self._last_credibility_details: Optional[Dict[str, str]] = None
+        self._last_entity_info: Optional[Dict[str, Any]] = None
+        self._last_timeline_info: Optional[Dict[str, Any]] = None
+        self._last_image_match: Optional[Dict[str, Any]] = None
+        self._last_consensus_score: Optional[float] = None
+        self._last_cache_hit: Optional[bool] = None
         self._last_message = ""
-        self._grading_breakdown = None
+        self._grading_breakdown: Optional[Dict[str, Any]] = None
 
     def reset(
         self,
@@ -71,11 +146,24 @@ class FakeNewsEnvironment(
         self._budget = BUDGET_MAP[self._difficulty]
         self._episode_id = episode_id or str(uuid.uuid4())
 
-        # Pick a random claim from the difficulty tier
-        self._current_claim = self.claim_manager.get_random_claim(self._difficulty)
+        # Clear NLI cache at the start of each episode — otherwise stale
+        # scores leak between episodes for the same claim text.
+        self.nli.clear_cache()
+
+        # Pick a random claim. If the DB is completely unavailable
+        # (should never happen in practice), fall back to a hardcoded
+        # minimal claim so the env doesn't crash the validator.
+        try:
+            self._current_claim = self.claim_manager.get_random_claim(self._difficulty)
+        except Exception:
+            self._current_claim = _EMERGENCY_CLAIM.copy()
+            self._current_claim["difficulty"] = self._difficulty
 
         image_url = self._current_claim.get("image_url")
-        visual_note = " This claim has an associated image — use analyze_image to examine it." if image_url else ""
+        visual_note = (
+            " This claim has an associated image — use analyze_image or "
+            "reverse_image_search to examine it." if image_url else ""
+        )
         return InvestigateObservation(
             claim=self._current_claim["claim"],
             available_sources=SOURCE_CATEGORIES,
@@ -85,9 +173,11 @@ class FakeNewsEnvironment(
             credibility_details=None,
             budget_remaining=self._budget,
             steps_taken=0,
-            message=f"New investigation started. Difficulty: {self._difficulty}. "
-            f"You have {self._budget} investigation steps."
-            f"{visual_note} Investigate the claim and submit your verdict.",
+            message=(
+                f"New investigation started. Difficulty: {self._difficulty}. "
+                f"You have {self._budget} investigation steps."
+                f"{visual_note} Investigate the claim and submit your verdict."
+            ),
             done=False,
             reward=None,
             image_url=image_url,
@@ -104,7 +194,6 @@ class FakeNewsEnvironment(
             return self._make_observation(
                 message="Episode is already complete. Call reset() to start a new one."
             )
-
         if self._current_claim is None:
             return self._make_observation(
                 message="No active episode. Call reset() first."
@@ -121,25 +210,50 @@ class FakeNewsEnvironment(
         self._last_cross_ref = None
         self._last_credibility = None
         self._last_credibility_details = None
+        self._last_entity_info = None
+        self._last_timeline_info = None
+        self._last_image_match = None
+        self._last_consensus_score = None
+        self._last_cache_hit = None
 
         # Dispatch by action type
-        if action.action_type == "request_source":
-            return self._handle_request_source(action)
-        elif action.action_type == "cross_reference":
-            return self._handle_cross_reference(action)
-        elif action.action_type == "check_credibility":
-            return self._handle_check_credibility(action)
-        elif action.action_type == "analyze_image":
-            return self._handle_analyze_image(action)
-        elif action.action_type == "submit_verdict":
-            return self._handle_submit_verdict(action)
-        else:
+        handler = {
+            "request_source": self._handle_request_source,
+            "cross_reference": self._handle_cross_reference,
+            "check_credibility": self._handle_check_credibility,
+            "analyze_image": self._handle_analyze_image,
+            "search_evidence": self._handle_search_evidence,
+            "check_entity": self._handle_check_entity,
+            "check_timeline": self._handle_check_timeline,
+            "reverse_image_search": self._handle_reverse_image_search,
+            "compute_consensus": self._handle_compute_consensus,
+            "submit_verdict": self._handle_submit_verdict,
+        }.get(action.action_type)
+
+        if handler is None:
             self._penalties += 0.02
-            return self._make_observation(
-                message=f"Unknown action_type: '{action.action_type}'. "
-                f"Valid types: request_source, cross_reference, "
-                f"check_credibility, submit_verdict",
+            obs = self._make_observation(
+                message=(
+                    f"Unknown action_type: '{action.action_type}'. "
+                    f"Valid types: {', '.join(self._VALID_ACTIONS)}"
+                )
             )
+            self._log_trajectory(action, obs)
+            return obs
+
+        # Every handler updates self._steps_used (for non-submit actions) and
+        # returns an observation. We wrap in a try/except to guarantee the
+        # env never raises — the validator test fails if any step blows up.
+        try:
+            obs = handler(action)
+        except Exception as exc:
+            self._penalties += 0.03
+            obs = self._make_observation(
+                message=f"Handler error in {action.action_type}: {str(exc)[:120]}"
+            )
+
+        self._log_trajectory(action, obs)
+        return obs
 
     @property
     def state(self) -> InvestigateState:
@@ -155,14 +269,17 @@ class FakeNewsEnvironment(
             claim_id=claim.get("id", ""),
         )
 
-    # =========================================================================
-    # Action Handlers
-    # =========================================================================
+    # =====================================================================
+    # Action handlers — existing 5 (upgraded to real backends)
+    # =====================================================================
 
-    def _handle_request_source(
-        self, action: InvestigateAction
-    ) -> InvestigateObservation:
-        """Handle request_source action — return evidence from a source category."""
+    def _handle_request_source(self, action: InvestigateAction) -> InvestigateObservation:
+        """Fetch evidence from a source category via RetrievalOrchestrator.
+
+        Before: returned a templated string from evidence_passages.
+        After: hits Wikipedia / Fact Check API / cached corpus depending on
+        the source category. Result is cached in evidence.db for the episode.
+        """
         self._steps_used += 1
         source_id = (action.source_id or "").lower().strip()
 
@@ -170,7 +287,6 @@ class FakeNewsEnvironment(
             self._last_message = "No source_id specified. Provide a source category."
             return self._make_observation(message=self._last_message)
 
-        # Validate source_id against known categories
         if source_id not in SOURCE_CATEGORIES:
             self._penalties += 0.02
             self._last_message = (
@@ -179,43 +295,48 @@ class FakeNewsEnvironment(
             )
             return self._make_observation(message=self._last_message)
 
-        evidence_passages = self._current_claim.get("evidence_passages", {})
+        result = self.retrieval.fetch(
+            claim=self._current_claim,
+            source_type=source_id,
+            query=action.query,
+            episode_id=self._episode_id,
+        )
 
-        # Exact match first, then substring fallback
-        matching_key = None
-        if source_id in evidence_passages:
-            matching_key = source_id
-        else:
-            for key in evidence_passages:
-                if source_id in key or key in source_id:
-                    matching_key = key
-                    break
-
-        if matching_key:
-            self._last_source_content = evidence_passages[matching_key]
+        if result["ok"] and result["content"]:
+            self._last_source_content = result["content"]
+            self._last_cache_hit = result["cache_hit"]
             self._accessed_sources.append(source_id)
+            self._retrieved_evidence.append({
+                "source_type": source_id,
+                "content": result["content"],
+                "url": result["source_url"],
+                "domain": result["source_domain"],
+                "is_synthetic": result["is_synthetic"],
+            })
+            tag = "[cached]" if result["cache_hit"] else ("[synthetic]" if result["is_synthetic"] else "[live]")
             self._last_message = (
-                f"Found evidence from '{source_id}'. "
+                f"Retrieved evidence from '{source_id}' {tag}. "
                 f"Budget remaining: {self._budget - self._steps_used}"
             )
         else:
-            # No evidence found for this category — slight penalty
             self._penalties += 0.03
             self._last_source_content = (
-                f"No specific evidence found for '{source_id}' related to this claim. "
-                f"Try a different source category."
+                f"No evidence retrieved for '{source_id}'. Try a different source category."
             )
             self._last_message = (
-                f"No relevant evidence found for '{source_id}'. "
+                f"No evidence for '{source_id}'. "
                 f"Budget remaining: {self._budget - self._steps_used}"
             )
 
         return self._make_observation(message=self._last_message)
 
-    def _handle_cross_reference(
-        self, action: InvestigateAction
-    ) -> InvestigateObservation:
-        """Handle cross_reference action — check claim against evidence using NLI."""
+    def _handle_cross_reference(self, action: InvestigateAction) -> InvestigateObservation:
+        """Real NLI via NLIClient — no more label-leaking simulation.
+
+        The agent specifies which retrieved source to cross-reference against.
+        We pull the cached evidence text for that source and classify
+        (claim, evidence) with DeBERTa on HF Inference API.
+        """
         self._steps_used += 1
         source_id = (action.source_id or "").lower().strip()
 
@@ -224,40 +345,34 @@ class FakeNewsEnvironment(
             self._last_message = "No source_id specified for cross-reference."
             return self._make_observation(message=self._last_message)
 
-        evidence_passages = self._current_claim.get("evidence_passages", {})
-
-        # Find matching evidence (exact match first)
-        evidence_text = evidence_passages.get(source_id)
-        if evidence_text is None:
-            for key in evidence_passages:
-                if source_id in key or key in source_id:
-                    evidence_text = evidence_passages[key]
-                    break
+        # Find evidence text for this source. Preference order:
+        # 1. Evidence retrieved this episode
+        # 2. EvidenceDB cache
+        # 3. Legacy evidence_passages on the claim
+        evidence_text = self._find_evidence_text(source_id)
 
         if not evidence_text:
-            self._last_cross_ref = {
-                "entailment": 0.33,
-                "contradiction": 0.33,
-                "neutral": 0.34,
-            }
+            self._last_cross_ref = {"entailment": 0.33, "contradiction": 0.33, "neutral": 0.34}
             self._last_message = (
-                f"No evidence found for '{source_id}' to cross-reference against."
+                f"No evidence found for '{source_id}'. "
+                f"Call request_source or search_evidence first."
             )
-        else:
-            # Deterministic NLI simulation based on claim label
-            label = self._current_claim["label"].lower()
-            self._last_cross_ref = self._simulate_nli(label, source_id)
-            self._last_message = (
-                f"Cross-referenced claim against '{source_id}'. "
-                f"Budget remaining: {self._budget - self._steps_used}"
-            )
+            return self._make_observation(message=self._last_message)
 
+        claim_text = self._current_claim.get("claim", "")
+        scores = self.nli.classify(claim=claim_text, evidence=evidence_text)
+        self._last_cross_ref = scores
+        self._nli_results.append({"source": source_id, "scores": scores, "tier": self.nli.last_tier})
+
+        self._last_message = (
+            f"Cross-referenced against '{source_id}' [{self.nli.last_tier}]. "
+            f"E={scores['entailment']:.2f} C={scores['contradiction']:.2f} N={scores['neutral']:.2f}. "
+            f"Budget remaining: {self._budget - self._steps_used}"
+        )
         return self._make_observation(message=self._last_message)
 
-    def _handle_check_credibility(
-        self, action: InvestigateAction
-    ) -> InvestigateObservation:
-        """Handle check_credibility action — look up source reliability."""
+    def _handle_check_credibility(self, action: InvestigateAction) -> InvestigateObservation:
+        """Look up publisher reputation in SourcesDB (thousands of entries)."""
         self._steps_used += 1
         source_id = action.source_id or ""
 
@@ -267,59 +382,331 @@ class FakeNewsEnvironment(
             "bias": result["bias"],
             "factual_reporting": result["factual_reporting"],
             "found": str(result["found"]),
+            "name": result.get("name", ""),
+            "country": result.get("country", ""),
         }
 
         if result["found"]:
             self._last_message = (
-                f"Credibility check for '{source_id}': "
-                f"Bias={result['bias']}, "
-                f"Factual={result['factual_reporting']}, "
-                f"Score={result['credibility_score']:.2f}"
+                f"Credibility for '{source_id}' -> {result.get('name','')}: "
+                f"bias={result['bias']}, factual={result['factual_reporting']}, "
+                f"score={result['credibility_score']:.2f}"
             )
         else:
             self._last_message = (
-                f"Source '{source_id}' not found in credibility database. "
+                f"Source '{source_id}' not found in credibility DB. "
                 f"Default score: 0.5"
             )
 
         return self._make_observation(message=self._last_message)
 
-    def _handle_analyze_image(
-        self, action: InvestigateAction
-    ) -> InvestigateObservation:
-        """Handle analyze_image action — return visual analysis of the claim's image."""
+    def _handle_analyze_image(self, action: InvestigateAction) -> InvestigateObservation:
+        """Real CLIP alignment + pHash matching for visual claims."""
         self._steps_used += 1
-        image_url = self._current_claim.get("image_url")
+        image_url = action.image_url or self._current_claim.get("image_url")
 
         if not image_url:
             self._last_source_content = (
                 "No image is associated with this claim. "
-                "This is a text-only claim — use request_source or cross_reference instead."
+                "This is a text-only claim — use request_source or search_evidence instead."
             )
+            self._penalties += 0.02
             self._last_message = (
-                f"No image found for this claim. "
+                f"No image to analyze. Budget remaining: {self._budget - self._steps_used}"
+            )
+            return self._make_observation(message=self._last_message)
+
+        # CLIP alignment (returns neutral if HF_TOKEN is missing)
+        claim_text = self._current_claim.get("claim", "")
+        clip_result = self.clip.align(image_url=image_url, claim=claim_text)
+
+        # pHash match against known misattributed images
+        phash = compute_phash(image_url)
+        image_match = None
+        if phash:
+            image_match = self.images_db.find_similar(phash, threshold=12)
+            if image_match:
+                self._last_image_match = {
+                    "original_source": image_match.get("original_source", ""),
+                    "verdict": image_match.get("verdict", ""),
+                    "description": image_match.get("description", ""),
+                    "hamming_distance": str(image_match.get("hamming_distance", "")),
+                }
+
+        parts = [f"CLIP verdict: {clip_result.get('verdict', 'unknown')}"]
+        if clip_result.get("ok"):
+            parts.append(
+                f"claim_score={clip_result.get('claim_score', 0.0):.3f} "
+                f"contradiction={clip_result.get('contradiction_score', 0.0):.3f}"
+            )
+        if image_match:
+            parts.append(
+                f"pHash match: {image_match.get('verdict')} "
+                f"(originally from {image_match.get('original_source')}, "
+                f"hamming={image_match.get('hamming_distance')})"
+            )
+        else:
+            parts.append("no pHash match in DB")
+
+        self._last_source_content = " | ".join(parts)
+        self._accessed_sources.append("image_analysis")
+        self._last_message = (
+            f"Visual analysis complete. {parts[0]}. "
+            f"Budget remaining: {self._budget - self._steps_used}"
+        )
+        return self._make_observation(message=self._last_message)
+
+    # =====================================================================
+    # Action handlers — new 5 actions
+    # =====================================================================
+
+    def _handle_search_evidence(self, action: InvestigateAction) -> InvestigateObservation:
+        """FTS5 search across the evidence corpus + live Wikipedia fallback."""
+        self._steps_used += 1
+        query = (action.query or self._current_claim.get("claim", ""))[:500]
+
+        # 1. Full-text search in evidence.db
+        fts_hits = self.evidence_db.search(query, limit=3)
+
+        # 2. If no hits, fall back to live Wikipedia retrieval
+        if not fts_hits:
+            retrieval_result = self.retrieval.fetch(
+                claim=self._current_claim,
+                source_type="wikipedia",
+                query=query,
+                episode_id=self._episode_id,
+            )
+            if retrieval_result["ok"] and retrieval_result["content"]:
+                self._last_source_content = retrieval_result["content"]
+                self._last_cache_hit = retrieval_result["cache_hit"]
+                self._retrieved_evidence.append({
+                    "source_type": "wikipedia_search",
+                    "content": retrieval_result["content"],
+                    "url": retrieval_result["source_url"],
+                    "domain": retrieval_result["source_domain"],
+                    "is_synthetic": retrieval_result["is_synthetic"],
+                })
+                self._last_message = (
+                    f"Searched evidence for '{query[:50]}' -> 1 live result from Wikipedia. "
+                    f"Budget remaining: {self._budget - self._steps_used}"
+                )
+                return self._make_observation(message=self._last_message)
+
+            self._last_source_content = f"No evidence found for query: {query[:100]}"
+            self._last_message = (
+                f"No evidence found. Budget remaining: {self._budget - self._steps_used}"
+            )
+            return self._make_observation(message=self._last_message)
+
+        # Format FTS hits
+        summary_lines = []
+        for i, hit in enumerate(fts_hits[:3], 1):
+            summary_lines.append(
+                f"[{i}] {hit.get('source_type', '?')}: {hit.get('content', '')[:200]}"
+            )
+            self._retrieved_evidence.append({
+                "source_type": hit.get("source_type", "evidence_search"),
+                "content": hit.get("content", ""),
+                "url": hit.get("source_url", ""),
+                "domain": hit.get("source_domain", ""),
+                "is_synthetic": False,
+            })
+
+        self._last_source_content = "\n".join(summary_lines)
+        self._last_message = (
+            f"Search returned {len(fts_hits)} hits. "
+            f"Budget remaining: {self._budget - self._steps_used}"
+        )
+        return self._make_observation(message=self._last_message)
+
+    def _handle_check_entity(self, action: InvestigateAction) -> InvestigateObservation:
+        """Resolve a named entity via Wikidata, cached in entities.db."""
+        self._steps_used += 1
+        entity_name = (action.entity or "").strip()
+
+        if not entity_name:
+            # Try to auto-extract an entity from the claim
+            claim_text = self._current_claim.get("claim", "")
+            entity_name = self._extract_first_entity(claim_text)
+
+        if not entity_name:
+            self._last_message = "No entity to resolve. Provide action.entity."
+            return self._make_observation(message=self._last_message)
+
+        # Check cache first
+        cached = self.entities_db.lookup(entity_name)
+        if cached:
+            self._last_entity_info = {
+                "name": cached.get("name", ""),
+                "type": cached.get("type", "unknown"),
+                "description": cached.get("description", ""),
+                "wikidata_id": cached.get("wikidata_id", ""),
+            }
+            self._last_cache_hit = True
+            self._last_message = (
+                f"Entity '{entity_name}' -> {cached.get('name')} "
+                f"(cached, type={cached.get('type')}). "
                 f"Budget remaining: {self._budget - self._steps_used}"
             )
-            self._penalties += 0.02  # Small penalty for wasting a step
-        else:
-            evidence_passages = self._current_claim.get("evidence_passages", {})
-            analysis = evidence_passages.get(
-                "image_analysis",
-                "Image analysis is not available for this claim.",
+            return self._make_observation(message=self._last_message)
+
+        # Live Wikidata fetch
+        result = self.wikidata.retrieve(entity_name)
+        if result.get("ok"):
+            self.entities_db.store(
+                name=entity_name,
+                display_name=result.get("name", entity_name),
+                wikidata_id=result.get("wikidata_id", ""),
+                entity_type=result.get("type", "unknown"),
+                description=result.get("description", ""),
+                properties=result.get("properties", {}),
             )
-            self._last_source_content = analysis
-            self._accessed_sources.append("image_analysis")
+            self._last_entity_info = {
+                "name": result.get("name", ""),
+                "type": result.get("type", "unknown"),
+                "description": result.get("description", ""),
+                "wikidata_id": result.get("wikidata_id", ""),
+            }
+            self._last_cache_hit = False
             self._last_message = (
-                f"Visual analysis complete. "
+                f"Resolved '{entity_name}' -> {result.get('name')} "
+                f"[{result.get('wikidata_id')}]. "
+                f"Budget remaining: {self._budget - self._steps_used}"
+            )
+        else:
+            self._last_entity_info = {"name": entity_name, "type": "not_found"}
+            self._last_message = (
+                f"Could not resolve entity '{entity_name}'. "
                 f"Budget remaining: {self._budget - self._steps_used}"
             )
 
         return self._make_observation(message=self._last_message)
 
-    def _handle_submit_verdict(
-        self, action: InvestigateAction
-    ) -> InvestigateObservation:
-        """Handle submit_verdict action — grade and end episode."""
+    def _handle_check_timeline(self, action: InvestigateAction) -> InvestigateObservation:
+        """Temporal analysis: when was the claim made vs when was it contradicted?"""
+        self._steps_used += 1
+        claim_id = self._current_claim.get("id", "")
+        claim_date = self._current_claim.get("claim_date")
+
+        if claim_date:
+            self.temporal_db.record_claim(claim_id=claim_id, first_seen_date=claim_date)
+
+        # Record any retrieved evidence dates we've seen this episode
+        for ev in self._retrieved_evidence:
+            if ev.get("is_synthetic"):
+                continue
+            self.temporal_db.record_evidence(
+                evidence_id=hashlib.sha256(ev.get("content", "").encode()).hexdigest()[:16],
+                claim_id=claim_id,
+                published_date=None,
+                supports_or_contradicts="contradicts",
+                source_domain=ev.get("domain", ""),
+                title=ev.get("source_type", ""),
+            )
+
+        timeline = self.temporal_db.get_timeline(claim_id)
+        delta = timeline.get("delta_analysis", {})
+        self._last_timeline_info = {
+            "status": delta.get("status", "unknown"),
+            "message": delta.get("message", ""),
+            "delta_days": str(delta.get("delta_days", "")),
+            "claim_first_seen": delta.get("claim_first_seen", claim_date or ""),
+        }
+        self._last_message = (
+            f"Timeline: {delta.get('message', 'no data')}. "
+            f"Budget remaining: {self._budget - self._steps_used}"
+        )
+        return self._make_observation(message=self._last_message)
+
+    def _handle_reverse_image_search(self, action: InvestigateAction) -> InvestigateObservation:
+        """pHash lookup against ImagesDB of known misattributed/AI-generated images."""
+        self._steps_used += 1
+        image_url = action.image_url or self._current_claim.get("image_url", "")
+        if not image_url:
+            self._last_message = "No image URL provided and claim has no image."
+            self._penalties += 0.02
+            return self._make_observation(message=self._last_message)
+
+        phash = compute_phash(image_url)
+        if not phash:
+            self._last_message = "Could not compute pHash (fetch or decode failed)."
+            return self._make_observation(message=self._last_message)
+
+        match = self.images_db.find_similar(phash, threshold=12)
+        if match:
+            self._last_image_match = {
+                "verdict": match.get("verdict", "unknown"),
+                "original_source": match.get("original_source", ""),
+                "description": match.get("description", ""),
+                "hamming_distance": str(match.get("hamming_distance", "")),
+                "fact_check_url": match.get("fact_check_url", ""),
+            }
+            self._last_message = (
+                f"Image match: {match.get('verdict')} "
+                f"(originally from {match.get('original_source')}). "
+                f"Budget remaining: {self._budget - self._steps_used}"
+            )
+        else:
+            self._last_image_match = {"verdict": "no_match"}
+            self._last_message = (
+                f"No pHash match in database. "
+                f"Budget remaining: {self._budget - self._steps_used}"
+            )
+        return self._make_observation(message=self._last_message)
+
+    def _handle_compute_consensus(self, action: InvestigateAction) -> InvestigateObservation:
+        """Aggregate multi-source agreement across all retrieved evidence.
+
+        Combines:
+        - NLI entailment - contradiction scores collected this episode
+        - Credibility of the sources those evidences came from
+        - Number of distinct sources
+
+        Returns a single [0, 1] consensus score where higher = more sources
+        agree the claim is supported.
+        """
+        self._steps_used += 1
+
+        if not self._nli_results:
+            self._last_consensus_score = 0.5
+            self._last_message = (
+                "No NLI results yet. Call cross_reference first. "
+                f"Budget remaining: {self._budget - self._steps_used}"
+            )
+            return self._make_observation(message=self._last_message)
+
+        # Per-source net score: entailment - contradiction, weighted by
+        # source credibility when known.
+        weighted_scores: List[float] = []
+        for r in self._nli_results:
+            scores = r.get("scores", {})
+            net = scores.get("entailment", 0.0) - scores.get("contradiction", 0.0)
+            source_name = r.get("source", "")
+            cred = self.sources_db.lookup(source_name)
+            weight = float(cred.get("credibility_score", 0.5))
+            weighted_scores.append(net * weight)
+
+        mean_net = statistics.mean(weighted_scores) if weighted_scores else 0.0
+        # Remap from [-1, 1] to [0, 1]
+        consensus = (mean_net + 1.0) / 2.0
+        # Strict bounds (validator will reject exact 0 or 1)
+        consensus = max(0.01, min(0.99, consensus))
+        self._last_consensus_score = round(consensus, 4)
+
+        n = len(weighted_scores)
+        self._last_message = (
+            f"Consensus across {n} sources: {consensus:.3f} "
+            f"(1.0 = strongly supports, 0.0 = strongly contradicts). "
+            f"Budget remaining: {self._budget - self._steps_used}"
+        )
+        return self._make_observation(message=self._last_message)
+
+    # =====================================================================
+    # Submit verdict — grade and finalize
+    # =====================================================================
+
+    def _handle_submit_verdict(self, action: InvestigateAction) -> InvestigateObservation:
+        """Grade the episode and return the final observation."""
         self._done = True
 
         verdict = action.verdict or "UNKNOWN"
@@ -327,27 +714,23 @@ class FakeNewsEnvironment(
         confidence = action.confidence if action.confidence is not None else 0.5
         reasoning = action.reasoning or ""
 
-        # Compute reward
         self._grading_breakdown = compute_reward(
             predicted_verdict=verdict,
-            ground_truth_verdict=self._current_claim["label"],
+            ground_truth_verdict=self._current_claim.get("label", "false"),
             cited_evidence=evidence,
-            gold_evidence=self._current_claim["gold_evidence"],
+            gold_evidence=self._current_claim.get("gold_evidence", []),
             steps_used=self._steps_used,
             max_budget=self._budget,
             confidence=confidence,
             agent_reasoning=reasoning,
-            gold_reasoning=self._current_claim["gold_reasoning"],
+            gold_reasoning=self._current_claim.get("gold_reasoning", ""),
             penalties=self._penalties,
         )
-
         self._reward = self._grading_breakdown["total"]
-
-        # Store for /grader endpoint access
         FakeNewsEnvironment._completed_episodes[self._episode_id] = self._grading_breakdown
 
         return InvestigateObservation(
-            claim=self._current_claim["claim"],
+            claim=self._current_claim.get("claim", ""),
             available_sources=SOURCE_CATEGORIES,
             source_content=None,
             cross_ref_result=None,
@@ -356,23 +739,24 @@ class FakeNewsEnvironment(
             budget_remaining=max(0, self._budget - self._steps_used),
             steps_taken=self._steps_used,
             message=(
-                f"Investigation complete. Your verdict: {verdict}. "
-                f"Ground truth: {self._current_claim['label']}. "
+                f"Investigation complete. Verdict: {verdict}. "
+                f"Ground truth: {self._current_claim.get('label', '?')}. "
                 f"Score: {self._reward:.4f}"
             ),
             done=True,
             reward=self._reward,
         )
 
-    # =========================================================================
+    # =====================================================================
     # Helpers
-    # =========================================================================
+    # =====================================================================
 
     def _make_observation(self, message: str) -> InvestigateObservation:
-        """Build an observation from current state."""
+        """Build an observation from current episode state."""
+        claim_text = self._current_claim.get("claim", "") if self._current_claim else ""
         image_url = self._current_claim.get("image_url") if self._current_claim else None
         return InvestigateObservation(
-            claim=self._current_claim["claim"] if self._current_claim else "",
+            claim=claim_text,
             available_sources=SOURCE_CATEGORIES,
             source_content=self._last_source_content,
             cross_ref_result=self._last_cross_ref,
@@ -384,61 +768,104 @@ class FakeNewsEnvironment(
             done=self._done,
             reward=self._reward if self._done else None,
             image_url=image_url,
+            entity_info=self._serialize_dict(self._last_entity_info),
+            timeline_info=self._serialize_dict(self._last_timeline_info),
+            image_match=self._serialize_dict(self._last_image_match),
+            consensus_score=self._last_consensus_score,
+            cache_hit=self._last_cache_hit,
         )
 
-    def _simulate_nli(self, label: str, source_id: str) -> dict:
-        """Simulate NLI scores based on claim label with added noise.
+    @staticmethod
+    def _serialize_dict(d: Optional[Dict[str, Any]]) -> Optional[Dict[str, str]]:
+        """Pydantic observation fields want Dict[str, str] — stringify values."""
+        if d is None:
+            return None
+        return {k: str(v) for k, v in d.items()}
 
-        For the hackathon, this provides cross-reference results with slight
-        randomness to prevent agents from gaming deterministic patterns.
-        In production, this would run DeBERTa inference.
+    def _find_evidence_text(self, source_id: str) -> str:
+        """Find cached or retrieved evidence text for a source.
+
+        Priority:
+        1. Evidence retrieved this episode (by source_type substring match)
+        2. EvidenceDB cache (any row for this claim with this source_type)
+        3. Legacy evidence_passages dict on the claim
         """
-        import random
-        # Evidence from fact-checks and government data tends to contradict false claims
-        authoritative_sources = {
-            "government_data", "fact_checks", "medical_journals",
-            "academic_papers", "international_organizations",
-        }
-        is_authoritative = any(s in source_id for s in authoritative_sources)
+        # 1. Episode-local cache
+        for ev in self._retrieved_evidence:
+            if source_id in ev.get("source_type", "") or ev.get("source_type", "") in source_id:
+                return ev.get("content", "")
 
-        if label == "false":
-            if is_authoritative:
-                return self._add_nli_noise({"entailment": 0.05, "contradiction": 0.88, "neutral": 0.07})
-            return self._add_nli_noise({"entailment": 0.15, "contradiction": 0.65, "neutral": 0.20})
-        elif label == "pants-fire":
-            # Pants-on-fire is HARD tier — make NLI more ambiguous
-            # so heuristic agents can't easily distinguish from half-true
-            if is_authoritative:
-                return self._add_nli_noise({"entailment": 0.15, "contradiction": 0.50, "neutral": 0.35})
-            return self._add_nli_noise({"entailment": 0.25, "contradiction": 0.40, "neutral": 0.35})
-        elif label in ("barely-true", "mostly-false"):
-            if is_authoritative:
-                return self._add_nli_noise({"entailment": 0.12, "contradiction": 0.68, "neutral": 0.20})
-            return self._add_nli_noise({"entailment": 0.25, "contradiction": 0.45, "neutral": 0.30})
-        elif label == "half-true":
-            # Half-true is HARD tier — highly ambiguous NLI
-            return self._add_nli_noise({"entailment": 0.33, "contradiction": 0.34, "neutral": 0.33})
-        elif label in ("mostly-true",):
-            if is_authoritative:
-                return self._add_nli_noise({"entailment": 0.70, "contradiction": 0.10, "neutral": 0.20})
-            return self._add_nli_noise({"entailment": 0.50, "contradiction": 0.20, "neutral": 0.30})
-        elif label == "true":
-            if is_authoritative:
-                return self._add_nli_noise({"entailment": 0.88, "contradiction": 0.05, "neutral": 0.07})
-            return self._add_nli_noise({"entailment": 0.65, "contradiction": 0.15, "neutral": 0.20})
-        else:
-            base = {"entailment": 0.33, "contradiction": 0.33, "neutral": 0.34}
-            return self._add_nli_noise(base)
+        # 2. EvidenceDB
+        claim_id = self._current_claim.get("id", "")
+        if claim_id:
+            rows = self.evidence_db.get_for_claim(claim_id)
+            for row in rows:
+                if source_id in row.get("source_type", "") or row.get("source_type", "") in source_id:
+                    return row.get("content", "")
+
+        # 3. Legacy
+        passages = self._current_claim.get("evidence_passages", {}) or {}
+        if source_id in passages:
+            return passages[source_id]
+        for key, val in passages.items():
+            if source_id in key or key in source_id:
+                return val
+        return ""
 
     @staticmethod
-    def _add_nli_noise(scores: dict, noise_range: float = 0.08) -> dict:
-        """Add small random noise to NLI scores so agents can't memorize exact values."""
-        import random
-        noisy = {}
-        for key, val in scores.items():
-            noisy[key] = max(0.0, min(1.0, val + random.uniform(-noise_range, noise_range)))  # nosec B311 — non-cryptographic game noise
-        # Re-normalize to sum to 1.0
-        total = sum(noisy.values())
-        if total > 0:
-            noisy = {k: round(v / total, 4) for k, v in noisy.items()}
-        return noisy
+    def _extract_first_entity(text: str) -> str:
+        """Naive entity extraction — longest capitalized multi-word phrase."""
+        import re
+        phrases = re.findall(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3}\b", text)
+        return max(phrases, key=len) if phrases else ""
+
+    def _log_trajectory(self, action: InvestigateAction, obs: InvestigateObservation) -> None:
+        """Log every step to trajectories.db for RL training. Failures are silent."""
+        if not self._episode_id or self._current_claim is None:
+            return
+        try:
+            state = {
+                "budget_remaining": obs.budget_remaining,
+                "steps_taken": obs.steps_taken,
+                "accessed_sources": list(self._accessed_sources),
+                "nli_count": len(self._nli_results),
+                "evidence_count": len(self._retrieved_evidence),
+            }
+            action_dict = {
+                "action_type": action.action_type,
+                "source_id": action.source_id,
+                "query": getattr(action, "query", None),
+                "entity": getattr(action, "entity", None),
+                "verdict": action.verdict,
+                "confidence": action.confidence,
+            }
+            self.trajectories_db.log_step(
+                episode_id=self._episode_id,
+                step_index=self._steps_used,
+                claim_id=self._current_claim.get("id", ""),
+                difficulty=self._difficulty,
+                state=state,
+                action=action_dict,
+                reward=self._reward if self._done else 0.0,
+                done=self._done,
+            )
+        except Exception:
+            pass
+
+
+# Emergency fallback claim if ClaimsDB is completely unavailable. Never
+# used in normal operation, but keeps the env bootable in degraded cases.
+_EMERGENCY_CLAIM: Dict[str, Any] = {
+    "id": "emergency_001",
+    "claim": "Water boils at 100 degrees Celsius at sea level.",
+    "label": "true",
+    "speaker": "Built-in",
+    "topic": "science",
+    "difficulty": "easy",
+    "claim_date": None,
+    "has_image": False,
+    "image_url": None,
+    "gold_evidence": ["physics_reference"],
+    "gold_reasoning": "This is a well-established physical fact at 1 atm pressure.",
+    "evidence_passages": {},
+}

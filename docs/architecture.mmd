@@ -1,0 +1,77 @@
+%% Veritas system architecture
+%% Rendered inline on GitHub/HuggingFace via ```mermaid fenced blocks
+%% in README.md. This file is the source of truth.
+
+graph TD
+    subgraph Agent["Agent (LLM or PPO)"]
+        AGT["inference.py<br/>10-action policy"]
+    end
+
+    subgraph Env["FakeNewsEnvironment<br/>(OpenEnv-compatible)"]
+        DISPATCH["Action dispatcher<br/>step() handler"]
+        GRADE["Grading engine<br/>multi-signal reward"]
+    end
+
+    subgraph Retrieval["Retrieval Orchestrator"]
+        CACHE_CHECK["Cache lookup<br/>evidence.db"]
+        WIKI["WikipediaRetriever<br/>(live REST)"]
+        FCA["FactCheckAPIRetriever<br/>(Google Fact Check)"]
+        WD["WikidataRetriever<br/>(SPARQL)"]
+        LEGACY["Legacy templated<br/>evidence fallback"]
+    end
+
+    subgraph ML["Cloud ML signals<br/>(HF Inference API)"]
+        NLI["NLIClient<br/>DeBERTa cross-encoder"]
+        CLIP["CLIPClient<br/>image-text alignment"]
+        PHASH["pHash<br/>perceptual hashing"]
+    end
+
+    subgraph DBs["Segregated Database Layer"]
+        CLAIMS[("claims.db<br/>12.8k LIAR + FEVER")]
+        EVIDENCE[("evidence.db<br/>FTS5 corpus")]
+        SOURCES[("sources.db<br/>96+ publishers")]
+        IMAGES[("images.db<br/>pHash matches")]
+        TEMPORAL[("temporal.db<br/>claim timelines")]
+        ENTITIES[("entities.db<br/>Wikidata cache")]
+        TRAJ[("trajectories.db<br/>RL + audit")]
+    end
+
+    AGT -->|action| DISPATCH
+    DISPATCH -->|submit_verdict| GRADE
+    GRADE -->|reward| AGT
+
+    DISPATCH -->|request_source<br/>search_evidence| CACHE_CHECK
+    CACHE_CHECK -->|miss| WIKI
+    CACHE_CHECK -->|miss| FCA
+    CACHE_CHECK -->|miss| LEGACY
+    WIKI -->|store| EVIDENCE
+    FCA -->|store| EVIDENCE
+    CACHE_CHECK -->|hit| EVIDENCE
+
+    DISPATCH -->|cross_reference| NLI
+    DISPATCH -->|analyze_image| CLIP
+    DISPATCH -->|analyze_image| PHASH
+    DISPATCH -->|reverse_image_search| PHASH
+    DISPATCH -->|check_credibility| SOURCES
+    DISPATCH -->|check_entity| WD
+    WD -->|store| ENTITIES
+    DISPATCH -->|check_entity| ENTITIES
+    DISPATCH -->|check_timeline| TEMPORAL
+    DISPATCH -->|reverse_image_search| IMAGES
+
+    DISPATCH -->|every step| TRAJ
+    Retrieval -.->|chain of custody| TRAJ
+
+    CLAIMS -.->|read| DISPATCH
+
+    classDef db fill:#1a3a5c,stroke:#4a8bc2,color:#fff
+    classDef ml fill:#3a1a5c,stroke:#8b4ac2,color:#fff
+    classDef ret fill:#1a5c3a,stroke:#4ac28b,color:#fff
+    classDef env fill:#5c3a1a,stroke:#c28b4a,color:#fff
+    classDef agt fill:#5c1a3a,stroke:#c24a8b,color:#fff
+
+    class CLAIMS,EVIDENCE,SOURCES,IMAGES,TEMPORAL,ENTITIES,TRAJ db
+    class NLI,CLIP,PHASH ml
+    class CACHE_CHECK,WIKI,FCA,WD,LEGACY ret
+    class DISPATCH,GRADE env
+    class AGT agt

@@ -3,9 +3,14 @@ FROM python:3.11-slim
 # Security: create non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser
 
-# Install system dependencies and remove them after pip install
+# Install system dependencies and remove them after pip install.
+# - build-essential: compile wheels that need C extensions
+# - libjpeg-dev, zlib1g-dev: Pillow requires these for JPEG/PNG support
+#   (Pillow is used for perceptual hashing in server/ml/phash.py)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    libjpeg-dev \
+    zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

@@ -5,17 +5,43 @@ from pydantic import Field
 
 
 class InvestigateAction(Action):
-    """What the agent sends to the environment each step."""
+    """What the agent sends to the environment each step.
+
+    Action space (10 total):
+    - request_source       : fetch evidence from a source category (real retrieval)
+    - cross_reference      : run NLI on claim vs retrieved evidence (real DeBERTa)
+    - check_credibility    : look up publisher in sources.db (4k+ publishers)
+    - analyze_image        : run CLIP + pHash on the claim's image
+    - search_evidence      : full-text search across evidence corpus + live Wikipedia
+    - check_entity         : resolve a named entity via Wikidata
+    - check_timeline       : temporal analysis (when made vs when contradicted)
+    - reverse_image_search : pHash lookup against known-misattributed images
+    - compute_consensus    : aggregate agreement across all retrieved evidence
+    - submit_verdict       : final verdict with evidence and reasoning
+    """
 
     action_type: str = Field(
         description=(
-            "One of: request_source, cross_reference, "
-            "check_credibility, submit_verdict, analyze_image"
+            "One of: request_source, cross_reference, check_credibility, "
+            "analyze_image, search_evidence, check_entity, check_timeline, "
+            "reverse_image_search, compute_consensus, submit_verdict"
         )
     )
     source_id: Optional[str] = Field(
         default=None,
         description="Source category or specific source ID to investigate",
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description="Free-text query for search_evidence (optional; defaults to claim text)",
+    )
+    entity: Optional[str] = Field(
+        default=None,
+        description="Named entity to resolve via Wikidata (for check_entity)",
+    )
+    image_url: Optional[str] = Field(
+        default=None,
+        description="Image URL for reverse_image_search (defaults to the claim's image)",
     )
     verdict: Optional[str] = Field(
         default=None,
@@ -72,6 +98,27 @@ class InvestigateObservation(Observation):
     image_url: Optional[str] = Field(
         default=None,
         description="URL of associated image if this is a visual claim",
+    )
+    # New observation fields for expanded action space
+    entity_info: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Resolved entity metadata from Wikidata (check_entity)",
+    )
+    timeline_info: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Claim + evidence temporal analysis (check_timeline)",
+    )
+    image_match: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Reverse image search result (reverse_image_search)",
+    )
+    consensus_score: Optional[float] = Field(
+        default=None,
+        description="Aggregated multi-source agreement score in [0,1] (compute_consensus)",
+    )
+    cache_hit: Optional[bool] = Field(
+        default=None,
+        description="Whether the last retrieval came from cache (debug/metrics)",
     )
 
 

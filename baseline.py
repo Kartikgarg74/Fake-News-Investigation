@@ -1,13 +1,47 @@
 """
-Baseline inference script for Fake News Investigator environment.
+DEPRECATED — use inference.py instead.
 
-Uses OpenAI GPT-4o-mini to investigate claims across 3 difficulty tiers.
-Reads OPENAI_API_KEY from environment variables.
+This was the v1 baseline for the Fake News Investigator environment, written
+for the original 5-action space (request_source, cross_reference,
+check_credibility, analyze_image, submit_verdict) and configured to read
+OPENAI_API_KEY directly.
 
-Usage:
+The canonical entry point for the Meta PyTorch × Scaler OpenEnv hackathon
+is now `inference.py`, which:
+
+  1. Uses the full 10-action space (adds search_evidence, check_entity,
+     check_timeline, reverse_image_search, compute_consensus).
+  2. Reads API_BASE_URL and API_KEY from os.environ (the validator-injected
+     variables) rather than OPENAI_API_KEY.
+  3. Emits [START]/[STEP]/[END] output blocks required by the validator.
+  4. Clamps all scores to (0.01, 0.99).
+  5. Wraps every env call in try/except so the script never crashes.
+
+This file is kept for historical reference and for quick standalone
+experiments with OpenAI-compatible providers (Groq, Together, etc.).
+If you're submitting to the hackathon, DO NOT use this file — use
+inference.py instead.
+
+Usage (standalone only):
     export OPENAI_API_KEY="sk-..."
     python baseline.py [--url http://localhost:8000] [--episodes 5]
 """
+
+import sys
+import warnings
+
+warnings.warn(
+    "baseline.py is deprecated — use inference.py for hackathon submissions. "
+    "This file targets the old 5-action space and OPENAI_API_KEY env var. "
+    "The validator expects the 10-action space and API_KEY/API_BASE_URL.",
+    DeprecationWarning,
+    stacklevel=2,
+)
+if __name__ == "__main__":
+    print("=" * 60, file=sys.stderr)
+    print("WARNING: baseline.py is deprecated.", file=sys.stderr)
+    print("For hackathon submissions, use: python inference.py", file=sys.stderr)
+    print("=" * 60, file=sys.stderr)
 
 import argparse
 import json

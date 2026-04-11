@@ -1,0 +1,40 @@
+{
+  "mode": "heuristic",
+  "episodes_per_task": 2,
+  "timestamp": "2026-04-11 09:05:52",
+  "tiers": {
+    "easy": {
+      "episodes": 2,
+      "avg_score": 0.27,
+      "min_score": 0.27,
+      "max_score": 0.27,
+      "stdev": 0.0,
+      "avg_steps": 3,
+      "avg_duration_s": 3.578,
+      "error_count": 0,
+      "errors": []
+    },
+    "medium": {
+      "episodes": 2,
+      "avg_score": 0.3375,
+      "min_score": 0.3375,
+      "max_score": 0.3375,
+      "stdev": 0.0,
+      "avg_steps": 3,
+      "avg_duration_s": 3.573,
+      "error_count": 0,
+      "errors": []
+    },
+    "hard": {
+      "episodes": 2,
+      "avg_score": 0.46,
+      "min_score": 0.445,
+      "max_score": 0.475,
+      "stdev": 0.0212,
+      "avg_steps": 3,
+      "avg_duration_s": 3.869,
+      "error_count": 0,
+      "errors": []
+    }
+  }
+}

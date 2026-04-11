@@ -1,0 +1,82 @@
+# .dockerignore — keep the Docker build context lean and deterministic.
+#
+# Without this, `COPY . /app/fake_news_investigator/` drags in backup dirs,
+# security scan reports, old DBs, build artifacts, and Python caches. That
+# both inflates the image and creates reproducibility hazards (e.g. the
+# 9 MB claims.db that caused 504 timeouts during openenv push).
+
+# ---------- Version control & editor ----------
+.git
+.github
+.gitignore
+.gitattributes
+.vscode
+.idea
+*.swp
+*.swo
+.DS_Store
+
+# ---------- Python build / cache ----------
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+dist
+build
+.eggs
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage
+.venv
+venv
+env
+
+# ---------- Tests (not needed at runtime) ----------
+tests
+
+# ---------- Security scan / audit artifacts ----------
+bandit-report*.json
+bandit-verification.json
+pip-audit*.json
+pip-audit-report.json
+security_scan_results*.json
+security-summary.json
+*.sarif
+
+# ---------- Old backups from earlier refactors ----------
+backup_*
+*.backup.*
+*.tmp
+*.bak
+
+# ---------- Previous outputs / ephemeral artifacts ----------
+outputs
+benchmark_results.json
+
+# ---------- Graphify / code-review-graph sidecars ----------
+graphify-out
+.code-review-graph
+
+# ---------- Large local DBs regenerated on first boot ----------
+# claims.db is recreated by ClaimsDB on first access from the built-in
+# samples, so we don't need to ship the 12791-row local DB. If someone
+# wants the full LIAR dataset, they run data/setup_data.py inside the
+# running container.
+# (Uncomment the lines below to exclude DBs. Commented out for now because
+# the current flow expects claims.db to be present at boot.)
+# data/*.db
+
+# ---------- Secrets / env files ----------
+.env
+.env.*
+!.env.security.example
+credentials.json
+*.pem
+*.key
+
+# ---------- Docker build artifacts ----------
+Dockerfile.dev
+docker-compose*.yml
+.dockerignore
