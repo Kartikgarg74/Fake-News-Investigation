@@ -111,7 +111,7 @@ RESPOND WITH JSON ONLY. NO MARKDOWN. NO EXPLANATION OUTSIDE THE JSON.
 ACTION_PATTERN = re.compile(r'\{[^{}]*"action_type"[^{}]*\}', re.DOTALL)
 
 
-def extract_json_action(text: str) -> dict:
+def extract_json_action(text: str) -> dict | None:
     """Extract a JSON action from the model's response.
 
     Tolerant to markdown fences, leading/trailing whitespace, and the
@@ -308,8 +308,8 @@ def main():
     for k, v in sorted(os.environ.items()):
         ku = k.upper()
         if any(x in ku for x in ("API", "KEY", "TOKEN", "URL", "MODEL", "HF_", "OPENAI")):
-            safe_v = (v[:20] + "...") if v and len(v) > 20 else (v or "")
-            print(f"  {k}={'SET' if v else 'EMPTY'} ({safe_v})", flush=True)
+            safe_v = f"SET ({len(v)} chars)" if v else "EMPTY"
+            print(f"  {k}={safe_v}", flush=True)
     print(flush=True)
 
     # Fallback for local dev: if validator didn't inject API_KEY, try HF_TOKEN

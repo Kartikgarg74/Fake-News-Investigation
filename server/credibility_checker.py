@@ -16,6 +16,10 @@ from .databases import SourcesDB
 
 
 class CredibilityChecker:
+    # NOTE: This facade exists purely for backward compatibility with environment.py
+    # and tests that import BUDGET_MAP/SOURCE_CATEGORIES from this module. New code
+    # should import directly from server.databases. Removing this file would require
+    # updating all import sites, which risks breaking the hackathon validator.
     """Facade over SourcesDB. Keeps the old check() API."""
 
     def __init__(self):

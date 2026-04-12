@@ -40,6 +40,10 @@ SOURCE_CATEGORIES = [
 
 
 class ClaimManager:
+    # NOTE: This facade exists purely for backward compatibility with environment.py
+    # and tests that import BUDGET_MAP/SOURCE_CATEGORIES from this module. New code
+    # should import directly from server.databases. Removing this file would require
+    # updating all import sites, which risks breaking the hackathon validator.
     """Backward-compat wrapper around ClaimsDB.
 
     The original ClaimManager exposed get_random_claim() and a handful of

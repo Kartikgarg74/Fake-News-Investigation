@@ -37,5 +37,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" || exit 1
 
-# Run server
+# Note: binds to 0.0.0.0 for Docker/HF Spaces (TLS terminated by reverse proxy).
+# For local development, server/app.py defaults HOST to 127.0.0.1.
 CMD ["uvicorn", "fake_news_investigator.server.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

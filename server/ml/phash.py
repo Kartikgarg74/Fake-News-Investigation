@@ -17,6 +17,8 @@ import math
 import urllib.request
 from typing import Optional
 
+from .url_validator import validate_url
+
 USER_AGENT = "Veritas-Vision/1.0"
 TIMEOUT = 10.0
 
@@ -42,9 +44,17 @@ def compute_phash(image_url_or_bytes) -> Optional[str]:
 
 
 def _fetch(url: str) -> Optional[bytes]:
+    """Fetch image bytes with SSRF protection.
+
+    Validates the URL against private IP ranges and unsafe schemes before
+    opening any connection.
+    """
+    err = validate_url(url)
+    if err is not None:
+        return None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310 — user-provided URL is part of claim data
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310 — URL pre-validated above
             if resp.length and resp.length > 20_000_000:
                 return None
             return resp.read()
@@ -96,7 +106,32 @@ def _phash_bytes(image_bytes: bytes) -> Optional[str]:
 
 
 def _dct_2d(pixels, n: int):
-    """Simple 2D DCT. O(n^4) — fine for n=32."""
+    """2D DCT. Uses numpy if available for ~100x speedup, else pure-Python fallback."""
+    try:
+        import numpy as np
+        arr = np.array(pixels, dtype=np.float64).reshape(n, n)
+
+        # Separable 1D DCT: rows then columns
+        def dct1d(x):
+            N = x.shape[0]
+            k = np.arange(N)
+            cos_table = np.cos(np.pi * (2 * np.arange(N).reshape(-1, 1) + 1) * k / (2 * N))
+            result = x @ cos_table
+            c = np.ones(N)
+            c[0] = 1 / np.sqrt(2)
+            return 0.5 * c * result
+
+        # Apply DCT to rows, then to columns
+        dct_rows = np.apply_along_axis(dct1d, 1, arr)
+        dct_2d_result = np.apply_along_axis(dct1d, 0, dct_rows)
+        return dct_2d_result.flatten().tolist()
+    except ImportError:
+        # Pure-Python fallback (slow but functional)
+        return _dct_2d_pure(pixels, n)
+
+
+def _dct_2d_pure(pixels, n: int):
+    """Pure-Python O(n^4) DCT fallback."""
     out = [0.0] * (n * n)
     for v in range(n):
         for u in range(n):

@@ -132,6 +132,34 @@ Every step is logged to `trajectories.db`. Every retrieval writes an audit row. 
 
 ---
 
+## Advanced Features
+
+### Trained Agent Demo
+
+`scripts/train_agent.py` runs 200 episodes (split 50/30/20 across easy/medium/hard) using a scripted heuristic agent, then trains a logistic regression policy (sklearn if available, numpy-only fallback) that maps 10-dimensional state features to verdict choices. A matplotlib learning curve comparing heuristic vs trained policy is saved to `outputs/learning_curve.png`. Per-episode stats go to `outputs/agent_stats.json`.
+
+```bash
+python scripts/train_agent.py
+python scripts/train_agent.py --episodes 500
+```
+
+### Adversarial Curriculum
+
+`server/adversarial.py` implements `AdversarialClaimGenerator`, which uses the LLM proxy to generate semantically harder variants of claims the agent solved easily. This creates a self-play dynamic: as the agent improves, the environment generates harder challenges. The `/generate_adversarial` endpoint exposes this via the API, and `FakeNewsEnvironment.reset_adversarial()` integrates it into the episode loop. The `/curriculum` endpoint returns generation stats.
+
+Degrades gracefully (returns `None`) when no API key is configured.
+
+### Cross-Lingual Fact-Checking
+
+`server/translation.py` implements `TranslationClient` with Unicode block heuristics for fast language detection (Hindi, Arabic, Chinese, Japanese, Korean, Cyrillic, Greek, Hebrew, Thai) plus LLM-based translation for 100+ languages. `FakeNewsEnvironment.reset_multilingual()` accepts claims in any language, translates to English for investigation, and stores `original_language` + `translated_claim` in the observation. The `/demo` dashboard includes a language selector, and the `/demo/stream` SSE endpoint emits a `translation` event for non-English claims.
+
+New endpoints:
+- `POST /translate` — translate any text to a target language
+- `POST /generate_adversarial` — generate a harder claim variant
+- `GET /curriculum` — adversarial generation stats
+
+---
+
 ## Quick start
 
 ### Install

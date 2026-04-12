@@ -10,10 +10,13 @@ Every DB manager inherits from DatabaseManager and gets:
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
+
+logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).parent.parent.parent / "data"
 TMP_DIR = Path("/tmp")
@@ -69,12 +72,12 @@ class DatabaseManager:
                 if self._is_empty(conn):
                     self._seed(conn)
                     conn.commit()
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError as exc:
             # Read-only path — nothing we can do. Queries will fail later
             # but the env will still boot (which is what the validator checks).
-            pass
-        except Exception:
-            pass
+            logger.debug("_ensure_schema OperationalError (likely read-only): %s", exc)
+        except Exception as exc:
+            logger.debug("_ensure_schema unexpected error: %s", exc, exc_info=True)
 
     def _migrate(self) -> None:
         """Hook for subclasses to add columns to existing DBs. Safe no-op by default."""
@@ -98,6 +101,7 @@ class DatabaseManager:
         """
         conn = sqlite3.connect(self.db_path, timeout=5.0)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
         try:
             yield conn
         finally:
@@ -109,7 +113,8 @@ class DatabaseManager:
             with self.connect() as conn:
                 cur = conn.execute(sql, params)
                 return cur.fetchall()
-        except Exception:
+        except Exception as exc:
+            logger.debug("execute() failed — sql=%r params=%r error=%s", sql, params, exc)
             return []
 
     def execute_one(self, sql: str, params: tuple = ()) -> Optional[sqlite3.Row]:
@@ -124,7 +129,8 @@ class DatabaseManager:
                 conn.execute(sql, params)
                 conn.commit()
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug("write() failed — sql=%r params=%r error=%s", sql, params, exc)
             return False
 
     def writemany(self, sql: str, params_list: list[tuple]) -> bool:
@@ -133,5 +139,6 @@ class DatabaseManager:
                 conn.executemany(sql, params_list)
                 conn.commit()
             return True
-        except Exception:
+        except Exception as exc:
+            logger.debug("writemany() failed — sql=%r error=%s", sql, exc)
             return False

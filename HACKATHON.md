@@ -43,6 +43,9 @@ Every claim below has a corresponding file you can grep to verify.
 | **93 passing unit tests**, 2 skipped (opt-in live network) | `tests/` (5 test files) |
 | **GitHub Actions CI** running tests + validator sanity checks | `.github/workflows/test.yml` |
 | **All 5 OpenEnv validator patterns preserved** in inference.py | `tests/test_inference_format.py` (15 regression tests) |
+| **Trained Agent + Learning Curve** — heuristic + logistic regression policy, PNG output | `scripts/train_agent.py`, `outputs/learning_curve.png`, `outputs/agent_stats.json` |
+| **Adversarial Curriculum** — LLM-generated harder claim variants, self-play loop | `server/adversarial.py`, `/generate_adversarial` endpoint, `/curriculum` endpoint, `env.reset_adversarial()` |
+| **Cross-Lingual Fact-Checking** — 100+ language auto-detection + translation | `server/translation.py`, `/translate` endpoint, `env.reset_multilingual()`, `/demo` language selector |
 
 Run `pytest tests/ -v` to verify all of the above in ~11 seconds.
 

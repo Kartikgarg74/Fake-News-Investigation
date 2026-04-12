@@ -1,7 +1,17 @@
+spec_version: 1
 name: fake-news-investigator
-version: "1.0.0"
+type: space
+runtime: fastapi
+app: server.app:app
+port: 8000
+version: "2.0.0"
 description: >
-  An interactive fact-checking environment where AI agents learn to investigate
-  and verify claims by requesting evidence, cross-referencing sources, checking
-  credibility, and submitting reasoned verdicts with confidence scores.
-  Trains the investigative PROCESS, not just classification accuracy.
+  Veritas — a production-grade fact-checking RL environment. Agents learn to
+  investigate claims through real Wikipedia retrieval, real DeBERTa NLI,
+  real CLIP image-text alignment, perceptual hashing for reverse image
+  search, Wikidata entity resolution, temporal analysis, and multi-source
+  consensus scoring. Every step is logged to an RL trajectory database and
+  every retrieval writes a chain-of-custody audit row. Seven segregated
+  SQLite databases, ten action types, 162 curated publisher credibility
+  ratings, FTS5-indexed evidence corpus. Built for the Meta PyTorch x
+  Scaler OpenEnv Hackathon (2026).

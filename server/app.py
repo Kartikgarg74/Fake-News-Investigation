@@ -1,7 +1,9 @@
 """FastAPI server for the Veritas fact-checking environment."""
 import json
 import os
+from typing import Literal
 
+from fastapi import Query
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from openenv.core.env_server import create_fastapi_app
@@ -64,6 +66,12 @@ def get_tasks():
                     "request_source",
                     "cross_reference",
                     "check_credibility",
+                    "analyze_image",
+                    "search_evidence",
+                    "check_entity",
+                    "check_timeline",
+                    "reverse_image_search",
+                    "compute_consensus",
                     "submit_verdict",
                 ],
                 "description": "The type of investigation action to perform",
@@ -189,6 +197,7 @@ _DEMO_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self';">
 <title>Veritas — Live Fact-Checking Demo</title>
 <style>
   :root {
@@ -240,6 +249,19 @@ _DEMO_HTML = """<!DOCTYPE html>
         <option value="medium">medium (8 step budget)</option>
         <option value="hard">hard (6 step budget)</option>
       </select>
+      <select id="language">
+        <option value="auto">Auto-detect language</option>
+        <option value="en">English</option>
+        <option value="hi">Hindi</option>
+        <option value="es">Spanish</option>
+        <option value="fr">French</option>
+        <option value="ar">Arabic</option>
+        <option value="zh">Chinese</option>
+        <option value="de">German</option>
+        <option value="ja">Japanese</option>
+        <option value="pt">Portuguese</option>
+        <option value="ko">Korean</option>
+      </select>
       <button id="run">Investigate</button>
       <span style="color: var(--muted); font-size: 0.85rem;">Heuristic strategy — runs a real investigation with live retrieval</span>
     </div>
@@ -263,7 +285,19 @@ const statusEl = $('status');
 function appendStep(stepType, title, body) {
   const div = document.createElement('div');
   div.className = 'step ' + stepType;
-  div.innerHTML = `<div class="step-head"><span>${title}</span><span>${new Date().toLocaleTimeString()}</span></div><div class="step-body">${body}</div>`;
+
+  // step-head: our own trusted content — innerHTML is safe here
+  const head = document.createElement('div');
+  head.className = 'step-head';
+  head.innerHTML = `<span>${title}</span><span>${new Date().toLocaleTimeString()}</span>`;
+
+  // step-body: user-controlled content — MUST use textContent to prevent XSS
+  const bodyEl = document.createElement('div');
+  bodyEl.className = 'step-body';
+  bodyEl.textContent = body;
+
+  div.appendChild(head);
+  div.appendChild(bodyEl);
   output.appendChild(div);
   div.scrollIntoView({behavior: 'smooth', block: 'end'});
 }
@@ -271,13 +305,19 @@ function appendStep(stepType, title, body) {
 function runInvestigation() {
   const claim = $('claim').value.trim();
   const difficulty = $('difficulty').value;
+  const language = $('language').value;
   if (!claim) return;
   output.innerHTML = '';
   runBtn.disabled = true;
   statusEl.textContent = 'investigating...';
 
-  const params = new URLSearchParams({claim, difficulty});
+  const params = new URLSearchParams({claim, difficulty, language});
   const es = new EventSource('/demo/stream?' + params.toString());
+
+  es.addEventListener('translation', (e) => {
+    const d = JSON.parse(e.data);
+    appendStep('action', `translating... (${d.source_lang} → en)`, d.message);
+  });
 
   es.addEventListener('step', (e) => {
     const d = JSON.parse(e.data);
@@ -321,11 +361,16 @@ def demo_page():
 
 
 @app.get("/demo/stream")
-def demo_stream(claim: str = "", difficulty: str = "easy"):
+def demo_stream(
+    claim: str = Query("", max_length=2000),
+    difficulty: Literal["easy", "medium", "hard"] = "easy",
+    language: str = Query("auto", max_length=20),
+):
     """SSE stream: run a heuristic investigation and emit events step by step.
 
     This is the same agent loop as run_heuristic_fallback in inference.py but
     streams each step over Server-Sent Events so the UI can render progress.
+    Supports cross-lingual claims via the language parameter.
     """
     def event_stream():
         if not claim:
@@ -340,18 +385,29 @@ def demo_stream(claim: str = "", difficulty: str = "easy"):
             yield "event: done\ndata: {}\n\n"
             return
 
-        # Inject the user's claim as the current_claim, bypassing LIAR dataset
-        env._reset_episode_state()
-        env._difficulty = difficulty if difficulty in ("easy", "medium", "hard") else "easy"
-        env._budget = {"easy": 10, "medium": 8, "hard": 6}[env._difficulty]
-        env._episode_id = "demo_" + str(int(__import__("time").time()))
-        env._current_claim = {
+        # Handle cross-lingual claims
+        investigation_claim = claim
+        detected_lang = "en"
+        try:
+            from .translation import TranslationClient
+            tc = TranslationClient()
+            detected_lang = tc.detect_language(claim) if language == "auto" else language
+            if detected_lang and detected_lang != "en":
+                yield f"event: translation\ndata: {json.dumps({'source_lang': detected_lang, 'message': f'Detected {detected_lang}. Translating to English for investigation...'})}\n\n"
+                investigation_claim = tc.translate_to_english(claim, detected_lang)
+        except Exception:
+            pass
+
+        # Use the public API to inject the user's claim, bypassing LIAR dataset
+        import time as _time
+        episode_id = "demo_" + str(int(_time.time()))
+        claim_dict = {
             "id": "demo_live",
-            "claim": claim,
+            "claim": investigation_claim,
             "label": "unknown",
             "speaker": "user",
             "topic": "user_submitted",
-            "difficulty": env._difficulty,
+            "difficulty": difficulty,
             "claim_date": None,
             "has_image": False,
             "image_url": None,
@@ -359,11 +415,12 @@ def demo_stream(claim: str = "", difficulty: str = "easy"):
             "gold_reasoning": "",
             "evidence_passages": {},
         }
+        env.reset_with_custom_claim(claim_dict, difficulty=difficulty, episode_id=episode_id)
 
         # Scripted investigation: search_evidence -> request_source wikipedia ->
         # cross_reference -> check_credibility -> compute_consensus -> submit
         actions_sequence = [
-            {"action_type": "search_evidence", "query": claim[:200]},
+            {"action_type": "search_evidence", "query": investigation_claim[:200]},
             {"action_type": "request_source", "source_id": "wikipedia"},
             {"action_type": "cross_reference", "source_id": "wikipedia"},
             {"action_type": "check_credibility", "source_id": "en.wikipedia.org"},
@@ -425,10 +482,92 @@ def demo_stream(claim: str = "", difficulty: str = "easy"):
         except Exception:
             score = 0.01
 
-        yield f"event: verdict\ndata: {json.dumps({'verdict': verdict, 'ground_truth': 'user-submitted (unknown)', 'score': score, 'reasoning': reasoning})}\n\n"
+        # Translate reasoning back to original language if non-English
+        display_reasoning = reasoning
+        if detected_lang and detected_lang != "en":
+            try:
+                from .translation import TranslationClient
+                tc = TranslationClient()
+                display_reasoning = tc.translate_from_english(reasoning, detected_lang)
+            except Exception:
+                pass
+
+        yield f"event: verdict\ndata: {json.dumps({'verdict': verdict, 'ground_truth': 'user-submitted (unknown)', 'score': score, 'reasoning': display_reasoning})}\n\n"
         yield "event: done\ndata: {}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/generate_adversarial")
+def generate_adversarial(
+    claim: str = "",
+    label: str = "",
+    verdict: str = "",
+    confidence: float = 0.5,
+):
+    """Generate an adversarially harder variant of a claim.
+
+    Uses AdversarialClaimGenerator with the LLM proxy. Returns the harder
+    claim dict, or {"claim": null} when no API key is configured.
+    """
+    from .adversarial import AdversarialClaimGenerator
+
+    gen = AdversarialClaimGenerator()
+    result = gen.generate(
+        claim_text=claim,
+        original_label=label,
+        agent_verdict=verdict,
+        agent_confidence=confidence,
+        nli_scores={},
+    )
+    return result if result is not None else {"claim": None, "reason": "degraded (no API key)"}
+
+
+@app.get("/curriculum")
+def curriculum_status():
+    """Return stats about generated adversarial claims.
+
+    Since AdversarialClaimGenerator instances are not persisted across
+    requests, this endpoint reports aggregate counts from the current
+    process lifetime. In production, wire this to a shared generator.
+    """
+    from .adversarial import AdversarialClaimGenerator
+
+    # Return an empty-stats summary when no shared generator exists
+    gen = AdversarialClaimGenerator()
+    return {
+        "stats": gen.get_stats(),
+        "note": (
+            "Counts reflect this process only. "
+            "Wire to a shared generator for persistent stats."
+        ),
+    }
+
+
+@app.post("/translate")
+def translate_claim(text: str = "", target_lang: str = "en"):
+    """Translate *text* to *target_lang* using the LLM proxy.
+
+    Degrades gracefully (returns original text) when no API key is set.
+    """
+    from .translation import TranslationClient
+
+    tc = TranslationClient()
+    detected = tc.detect_language(text) if text else "en"
+
+    if target_lang == "en":
+        translated = tc.translate_to_english(text, detected)
+    else:
+        # Translate to target: go through English if source is not English
+        english_text = tc.translate_to_english(text, detected) if detected != "en" else text
+        translated = tc.translate_from_english(english_text, target_lang)
+
+    return {
+        "original": text,
+        "detected_language": detected,
+        "target_language": target_lang,
+        "translated": translated,
+    }
 
 
 @app.get("/trajectories")

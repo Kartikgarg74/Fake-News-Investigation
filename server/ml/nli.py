@@ -24,9 +24,31 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from typing import Any, Dict, Optional
+
+
+class BoundedCache(OrderedDict):
+    """LRU cache with a fixed maximum size.
+
+    Evicts the least-recently-used entry when the limit is exceeded.
+    Thread-safety is not required because each FakeNewsEnvironment instance
+    owns its own NLIClient and is never shared across threads.
+    """
+
+    def __init__(self, max_size: int = 512):
+        super().__init__()
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.max_size:
+            self.popitem(last=False)
 
 HF_INFERENCE_URL = "https://api-inference.huggingface.co/models"
 DEFAULT_NLI_MODEL = "cross-encoder/nli-deberta-v3-base"
@@ -46,7 +68,7 @@ class NLIClient:
         self.hf_token = hf_token or os.environ.get("HF_TOKEN", "")
         self.use_proxy_fallback = use_proxy_fallback
         # Episode-lifetime cache. Keyed by (claim_hash, evidence_hash).
-        self._cache: Dict[str, Dict[str, float]] = {}
+        self._cache: BoundedCache = BoundedCache(max_size=512)
         # Track which tier served the last call (for debugging/metrics)
         self.last_tier: str = ""
 
@@ -209,7 +231,6 @@ class NLIClient:
             parsed = json.loads(stripped)
         except json.JSONDecodeError:
             # Try to extract the first {...} block
-            import re
             match = re.search(r"\{[^{}]*\}", stripped)
             if not match:
                 return None

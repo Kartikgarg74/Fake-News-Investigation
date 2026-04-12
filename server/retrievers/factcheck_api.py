@@ -40,13 +40,15 @@ class FactCheckAPIRetriever:
 
         params = {
             "query": search_query,
-            "key": self.api_key,
             "languageCode": "en",
             "pageSize": "5",
         }
         url = f"{API_URL}?{urllib.parse.urlencode(params)}"
         try:
-            req = urllib.request.Request(url)
+            req = urllib.request.Request(
+                url,
+                headers={"X-Goog-Api-Key": self.api_key},
+            )
             with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310 — fixed Google host
                 data = json.loads(resp.read().decode("utf-8"))
         except Exception:

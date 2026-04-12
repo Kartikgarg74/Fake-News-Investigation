@@ -15,7 +15,28 @@ import json
 import os
 import urllib.parse
 import urllib.request
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional
+
+from .url_validator import validate_url
+
+
+class BoundedCache(OrderedDict):
+    """LRU cache with a fixed maximum size.
+
+    Evicts the least-recently-used entry when the limit is exceeded.
+    """
+
+    def __init__(self, max_size: int = 512):
+        super().__init__()
+        self.max_size = max_size
+
+    def __setitem__(self, key, value):
+        if key in self:
+            self.move_to_end(key)
+        super().__setitem__(key, value)
+        if len(self) > self.max_size:
+            self.popitem(last=False)
 
 HF_INFERENCE_URL = "https://api-inference.huggingface.co/models"
 DEFAULT_CLIP_MODEL = "openai/clip-vit-base-patch32"
@@ -32,7 +53,7 @@ class CLIPClient:
     ):
         self.model = model
         self.hf_token = hf_token or os.environ.get("HF_TOKEN", "")
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache: BoundedCache = BoundedCache(max_size=512)
 
     def align(
         self, image_url: str, claim: str, candidate_labels: Optional[List[str]] = None
@@ -103,13 +124,20 @@ class CLIPClient:
             return result
 
     def _fetch_image(self, url: str) -> Optional[bytes]:
-        """Download image bytes for upload to HF Inference API."""
+        """Download image bytes for upload to HF Inference API.
+
+        SSRF protection: the URL is validated before connecting — private IP
+        ranges, non-http(s) schemes, and unresolvable hostnames are rejected.
+        """
+        err = validate_url(url)
+        if err is not None:
+            return None
         try:
             req = urllib.request.Request(
                 url,
                 headers={"User-Agent": "Veritas-Vision/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310 — user-provided URL is part of claim data
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosec B310 — URL pre-validated above
                 if resp.length and resp.length > 10_000_000:  # 10MB cap
                     return None
                 return resp.read()

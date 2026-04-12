@@ -120,6 +120,14 @@ class InvestigateObservation(Observation):
         default=None,
         description="Whether the last retrieval came from cache (debug/metrics)",
     )
+    original_language: Optional[str] = Field(
+        default=None,
+        description="Detected language of the original claim",
+    )
+    translated_claim: Optional[str] = Field(
+        default=None,
+        description="English translation of the claim (if non-English)",
+    )
 
 
 class InvestigateState(State):

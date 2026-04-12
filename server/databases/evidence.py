@@ -131,7 +131,12 @@ class EvidenceDB(DatabaseManager):
         special FTS5 characters are escaped to prevent syntax errors from
         user input.
         """
-        safe_query = query.replace('"', '').replace("'", "")
+        # Sanitize: split into words, wrap each in double quotes for FTS5.
+        # This prevents FTS5 injection via special tokens (OR, AND, NEAR, *,
+        # prefix operators, etc.) while still allowing multi-term searches.
+        terms = query.strip().split()
+        safe_terms = [f'"{t.replace(chr(34), "")}"' for t in terms if t.strip()]
+        safe_query = " ".join(safe_terms) if safe_terms else '""'
         # FTS5 needs terms wrapped for multi-word queries
         try:
             rows = self.execute(

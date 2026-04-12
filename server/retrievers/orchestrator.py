@@ -187,8 +187,7 @@ class RetrievalOrchestrator:
         # Direct hit
         if source_type in passages:
             return str(passages[source_type])
-        # Substring match (e.g. "wikipedia" matches "academic_papers" nope,
-        # but "fact_checks" might match "fact_check_api")
+        # Substring match (e.g. "fact_checks" might match "fact_check_api")
         for key, val in passages.items():
             if source_type in key or key in source_type:
                 return str(val)
